@@ -8,7 +8,9 @@ dependencies = [
     "tenacity>=8.2",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "pybreaker>=1.2",
     "structlog>=24.1",
+    "tornado>=6.4",
 ]
 
 [project.optional-dependencies]
