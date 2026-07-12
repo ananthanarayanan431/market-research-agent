@@ -644,12 +644,18 @@ async def test_exa_search_raises_search_tool_error_when_circuit_open(http_client
     with pytest.raises(SearchToolError):
         await tool.search("first call trips the breaker")
 
+    # the first call above already made HTTP_RETRY's 3 attempts (all 500s)
+    # before the breaker (which wraps the whole retrying call as one unit)
+    # registered its single failure and tripped — so the route's call_count
+    # is already 3, not 0, by this point. Assert the SECOND call adds no
+    # further calls (short-circuits) rather than asserting an absolute 0.
     route = respx.post("https://api.exa.ai/search")
+    calls_before_second_attempt = route.call_count
     with pytest.raises(SearchToolError) as exc_info:
         await tool.search("second call should short-circuit")
 
     assert "circuit open" in str(exc_info.value)
-    assert route.call_count == 0
+    assert route.call_count == calls_before_second_attempt
 ```
 
 ```python
@@ -722,12 +728,16 @@ async def test_tavily_search_raises_search_tool_error_when_circuit_open(http_cli
     with pytest.raises(SearchToolError):
         await tool.search("first call trips the breaker")
 
+    # the first call above already made HTTP_RETRY's 3 attempts (all 500s)
+    # before the breaker tripped, so assert the SECOND call adds no further
+    # calls (short-circuits) rather than asserting an absolute 0.
     route = respx.post("https://api.tavily.com/search")
+    calls_before_second_attempt = route.call_count
     with pytest.raises(SearchToolError) as exc_info:
         await tool.search("second call should short-circuit")
 
     assert "circuit open" in str(exc_info.value)
-    assert route.call_count == 0
+    assert route.call_count == calls_before_second_attempt
 ```
 
 Note: both tools' `__init__` gains an optional `breaker_fail_max: int = 5` parameter (see Step 3) purely so tests can trip the breaker in one call instead of five — production callers (the registry, in a later task) don't need to pass it and get the default.
@@ -993,12 +1003,18 @@ async def test_news_search_raises_search_tool_error_when_circuit_open(http_clien
     with pytest.raises(SearchToolError):
         await tool.search("first call trips the breaker")
 
+    # the first call above already made HTTP_RETRY's 3 attempts (all 500s)
+    # before the breaker (which wraps the whole retrying call as one unit)
+    # registered its single failure and tripped — so the route's call_count
+    # is already 3, not 0, by this point. Assert the SECOND call adds no
+    # further calls (short-circuits) rather than asserting an absolute 0.
     route = respx.get("https://newsapi.org/v2/everything")
+    calls_before_second_attempt = route.call_count
     with pytest.raises(SearchToolError) as exc_info:
         await tool.search("second call should short-circuit")
 
     assert "circuit open" in str(exc_info.value)
-    assert route.call_count == 0
+    assert route.call_count == calls_before_second_attempt
 ```
 
 ```python
@@ -1102,12 +1118,17 @@ async def test_reddit_search_raises_search_tool_error_when_circuit_open(http_cli
     with pytest.raises(SearchToolError):
         await tool.search("first call trips the breaker")
 
+    # as with the other tools' circuit-open tests: the first call already
+    # made HTTP_RETRY's attempts against the token endpoint before the
+    # breaker tripped, so assert the SECOND call adds no further calls
+    # rather than asserting an absolute 0.
     token_route = respx.post("https://www.reddit.com/api/v1/access_token")
+    calls_before_second_attempt = token_route.call_count
     with pytest.raises(SearchToolError) as exc_info:
         await tool.search("second call should short-circuit")
 
     assert "circuit open" in str(exc_info.value)
-    assert token_route.call_count == 0
+    assert token_route.call_count == calls_before_second_attempt
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
