@@ -86,7 +86,7 @@ otel-collector-config.yaml
 
 - [ ] **Step 1: Add the `pybreaker` dependency**
 
-Edit `backend/pyproject.toml`'s `dependencies` list to add `"pybreaker>=1.2"` alongside the existing entries (keep alphabetical-ish grouping consistent with the existing list — insert after `"pydantic-settings>=2.3"` and before `"structlog>=24.1"`).
+Edit `backend/pyproject.toml`'s `dependencies` list to add `"pybreaker>=1.2"` and `"tornado>=6.4"` alongside the existing entries (keep alphabetical-ish grouping consistent with the existing list — insert after `"pydantic-settings>=2.3"` and before `"structlog>=24.1"`). `tornado` is required because `pybreaker`'s `call_async` is implemented with Tornado's `@gen.coroutine` decorator rather than raw `asyncio` — Tornado 5+ runs its event loop on top of `asyncio`, so this interops correctly with our async code, but the package must be present or `call_async` raises `NameError: name 'gen' is not defined`.
 
 ```bash
 cd backend && uv sync --extra dev
