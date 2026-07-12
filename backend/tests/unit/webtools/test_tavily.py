@@ -60,3 +60,24 @@ async def test_tavily_search_raises_search_tool_error_on_http_error(
         await tool.search("EV charging")
 
     assert exc_info.value.tool_name == "tavily"
+
+
+@respx.mock
+async def test_tavily_search_raises_search_tool_error_when_circuit_open(
+    http_client: httpx.AsyncClient,
+) -> None:
+    respx.post("https://api.tavily.com/search").mock(
+        return_value=httpx.Response(500, json={"error": "down"})
+    )
+    tool = TavilySearchTool(api_key="tvly-test", client=http_client, breaker_fail_max=1)
+
+    with pytest.raises(SearchToolError):
+        await tool.search("first call trips the breaker")
+
+    route = respx.post("https://api.tavily.com/search")
+    calls_before_second_attempt = route.call_count
+    with pytest.raises(SearchToolError) as exc_info:
+        await tool.search("second call should short-circuit")
+
+    assert "circuit open" in str(exc_info.value)
+    assert route.call_count == calls_before_second_attempt
