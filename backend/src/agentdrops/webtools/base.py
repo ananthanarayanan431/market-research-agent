@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -41,6 +43,20 @@ RETRYABLE_HTTP = retry(
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     reraise=True,
 )
+
+
+@asynccontextmanager
+async def wrap_http_errors(tool_name: str, *, prefix: str = "") -> AsyncIterator[None]:
+    try:
+        yield
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:500]
+        msg = f"{prefix}HTTP {exc.response.status_code}: {body}"
+        raise SearchToolError(tool_name, msg) from exc
+    except httpx.TransportError as exc:
+        raise SearchToolError(tool_name, f"{prefix}transport error: {exc}") from exc
+    except KeyError as exc:
+        raise SearchToolError(tool_name, f"{prefix}malformed response: missing key {exc}") from exc
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:

@@ -2,7 +2,12 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
-from agentdrops.webtools.base import RETRYABLE_HTTP, BaseSearchTool, SearchResult, SearchToolError
+from agentdrops.webtools.base import (
+    RETRYABLE_HTTP,
+    BaseSearchTool,
+    SearchResult,
+    wrap_http_errors,
+)
 
 
 class TavilySearchTool(BaseSearchTool):
@@ -13,26 +18,20 @@ class TavilySearchTool(BaseSearchTool):
         self._client = client
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        try:
+        async with wrap_http_errors(self.name):
             payload = await self._call(query, max_results)
-        except httpx.HTTPStatusError as exc:
-            msg = f"HTTP {exc.response.status_code}: {exc.response.text}"
-            raise SearchToolError(self.name, msg) from exc
-        except httpx.TransportError as exc:
-            raise SearchToolError(self.name, f"transport error: {exc}") from exc
-
-        results: list[SearchResult] = []
-        for item in payload.get("results", []):
-            results.append(
-                SearchResult(
-                    tool_name=self.name,
-                    title=item.get("title") or item["url"],
-                    url=item["url"],
-                    snippet=(item.get("content") or "")[:1000],
-                    published_at=None,
-                    score=item.get("score"),
+            results: list[SearchResult] = []
+            for item in payload.get("results", [])[:max_results]:
+                results.append(
+                    SearchResult(
+                        tool_name=self.name,
+                        title=item.get("title") or item["url"],
+                        url=item["url"],
+                        snippet=(item.get("content") or "")[:1000],
+                        published_at=None,
+                        score=item.get("score"),
+                    )
                 )
-            )
         return results
 
     @RETRYABLE_HTTP

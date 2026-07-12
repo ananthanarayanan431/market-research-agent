@@ -52,6 +52,21 @@ async def test_exa_search_raises_search_tool_error_on_http_error(
 
 
 @respx.mock
+async def test_exa_search_raises_search_tool_error_on_malformed_response(
+    http_client: httpx.AsyncClient,
+) -> None:
+    respx.post("https://api.exa.ai/search").mock(
+        return_value=httpx.Response(200, json={"results": [{"title": "t"}]})
+    )
+    tool = ExaSearchTool(api_key="test-key", client=http_client)
+
+    with pytest.raises(SearchToolError) as exc_info:
+        await tool.search("AI note-taking apps")
+
+    assert exc_info.value.tool_name == "exa"
+
+
+@respx.mock
 async def test_exa_search_retries_on_transient_5xx_then_succeeds(
     http_client: httpx.AsyncClient,
 ) -> None:

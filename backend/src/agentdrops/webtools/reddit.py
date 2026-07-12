@@ -7,8 +7,8 @@ from agentdrops.webtools.base import (
     RETRYABLE_HTTP,
     BaseSearchTool,
     SearchResult,
-    SearchToolError,
     parse_epoch_seconds,
+    wrap_http_errors,
 )
 
 
@@ -27,44 +27,35 @@ class RedditSearchTool(BaseSearchTool):
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
         token = await self._get_access_token()
-        try:
+        async with wrap_http_errors(self.name):
             payload = await self._call(query, max_results, token)
-        except httpx.HTTPStatusError as exc:
-            msg = f"HTTP {exc.response.status_code}: {exc.response.text}"
-            raise SearchToolError(self.name, msg) from exc
-        except httpx.TransportError as exc:
-            raise SearchToolError(self.name, f"transport error: {exc}") from exc
-
-        results: list[SearchResult] = []
-        for child in payload.get("data", {}).get("children", [])[:max_results]:
-            post = child.get("data", {})
-            permalink = post.get("permalink", "")
-            results.append(
-                SearchResult(
-                    tool_name=self.name,
-                    title=post.get("title", ""),
-                    url=f"https://reddit.com{permalink}" if permalink else post.get("url", ""),
-                    snippet=(post.get("selftext") or "")[:1000],
-                    published_at=parse_epoch_seconds(post.get("created_utc")),
-                    score=post.get("score"),
+            results: list[SearchResult] = []
+            for child in payload.get("data", {}).get("children", [])[:max_results]:
+                post = child.get("data", {})
+                permalink = post.get("permalink", "")
+                url = f"https://reddit.com{permalink}" if permalink else post.get("url", "")
+                results.append(
+                    SearchResult(
+                        tool_name=self.name,
+                        title=post.get("title") or url,
+                        url=url,
+                        snippet=(post.get("selftext") or "")[:1000],
+                        published_at=parse_epoch_seconds(post.get("created_utc")),
+                        score=post.get("score"),
+                    )
                 )
-            )
         return results
 
     async def _get_access_token(self) -> str:
         if self._token and self._token_expires_at and datetime.now(UTC) < self._token_expires_at:
             return self._token
 
-        try:
+        async with wrap_http_errors(self.name, prefix="token "):
             payload = await self._fetch_token()
-        except httpx.HTTPStatusError as exc:
-            msg = f"token HTTP {exc.response.status_code}: {exc.response.text}"
-            raise SearchToolError(self.name, msg) from exc
-        except httpx.TransportError as exc:
-            raise SearchToolError(self.name, f"token transport error: {exc}") from exc
-
-        self._token = payload["access_token"]
-        self._token_expires_at = datetime.now(UTC) + timedelta(seconds=payload["expires_in"] - 60)
+            self._token = payload["access_token"]
+            self._token_expires_at = datetime.now(UTC) + timedelta(
+                seconds=payload["expires_in"] - 60
+            )
         return self._token
 
     @RETRYABLE_HTTP

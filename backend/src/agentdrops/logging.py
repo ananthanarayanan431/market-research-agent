@@ -1,7 +1,6 @@
 import logging
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from typing import cast
 
 import structlog
@@ -34,10 +33,5 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name))
 
 
-@contextmanager
-def bind_run_id(run_id: str) -> Iterator[None]:
-    structlog.contextvars.bind_contextvars(run_id=run_id)
-    try:
-        yield
-    finally:
-        structlog.contextvars.unbind_contextvars("run_id")
+def bind_run_id(run_id: str) -> AbstractContextManager[None]:
+    return structlog.contextvars.bound_contextvars(run_id=run_id)
