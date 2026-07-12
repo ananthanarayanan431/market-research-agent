@@ -153,10 +153,16 @@ async def test_call_with_breaker_opens_after_fail_max_failures() -> None:
     async def fail() -> str:
         raise RuntimeError("boom")
 
-    for _ in range(2):
-        with pytest.raises(RuntimeError):
-            await call_with_breaker(breaker, fail)
+    # first failure: below threshold, original exception propagates
+    with pytest.raises(RuntimeError):
+        await call_with_breaker(breaker, fail)
 
+    # second failure reaches fail_max=2 — pybreaker raises CircuitBreakerError
+    # on this same tripping call rather than propagating RuntimeError
+    with pytest.raises(pybreaker.CircuitBreakerError):
+        await call_with_breaker(breaker, fail)
+
+    # circuit stays open: further calls also short-circuit
     with pytest.raises(pybreaker.CircuitBreakerError):
         await call_with_breaker(breaker, fail)
 
@@ -170,14 +176,19 @@ async def test_call_with_breaker_open_circuit_does_not_invoke_the_function() -> 
         call_count += 1
         raise RuntimeError("boom")
 
-    with pytest.raises(RuntimeError):
+    # fail_max=1: the first failure both invokes func AND reaches the
+    # threshold, so pybreaker raises CircuitBreakerError on this call too
+    with pytest.raises(pybreaker.CircuitBreakerError):
         await call_with_breaker(breaker, fail)
     assert call_count == 1
 
+    # circuit is now open: second call short-circuits without invoking func
     with pytest.raises(pybreaker.CircuitBreakerError):
         await call_with_breaker(breaker, fail)
     assert call_count == 1
 ```
+
+**Verified pybreaker behavior (confirmed by reading `pybreaker/__init__.py`'s `CircuitClosedState.on_failure`):** when a failure causes the internal counter to reach `fail_max`, pybreaker raises `CircuitBreakerError` on that same tripping call instead of propagating the original exception — the original exception only propagates on failures *below* the threshold. `call_with_breaker` does not need to change to accommodate this; it's the test expectations above that must match this real, verified behavior.
 
 Each test uses a unique breaker name — the registry is a module-level cache that persists for the process, so reusing a name across tests would leak open-circuit state between them.
 
