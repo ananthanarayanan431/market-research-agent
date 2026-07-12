@@ -48,7 +48,7 @@ Adapted from `open_deep_research`'s supervisor/researcher pattern:
 
 1. `write_research_brief` — turns the input topic (+ optional constraints) into a structured research brief via structured-output LLM call.
 2. `supervisor` / `supervisor_tools` — lead researcher plans strategy, delegates parallel sub-topics to `researcher` subgraphs via a `ConductResearch` tool, uses `think_tool` for strategic reflection between rounds, and a `ResearchComplete` tool to end the phase. Bounded by `max_researcher_iterations` and `max_concurrent_research_units` (configurable).
-3. `researcher` / `researcher_tools` (parallel subgraph instances) — each investigates one sub-topic using three tools: `exa_search` (general web), `newsapi_search` (recent news), `reddit_search` (community signal), plus `think_tool`. Runs until its own `ResearchComplete` or `max_react_tool_calls`.
+3. `researcher` / `researcher_tools` (parallel subgraph instances) — each investigates one sub-topic using four search tools: `exa_search` (general web), `tavily_search` (general web, second source for diversity/redundancy), `newsapi_search` (recent news), `reddit_search` (community signal), plus `think_tool`. Runs until its own `ResearchComplete` or `max_react_tool_calls`.
 4. `compress_research` — each sub-researcher's raw findings are compressed into a clean summary + raw notes are preserved for citation/export.
 5. `final_report_generation` — synthesizes all compressed findings + the research brief into the final market research report (markdown).
 6. `idea_refine_generation` (new node) — three sequential structured-output calls over the final report:
@@ -64,7 +64,7 @@ Failure handling mirrors the upstream pattern: tool execution errors are capture
 
 - **runs**: `id (uuid pk)`, `topic`, `constraints (jsonb, nullable)`, `status (queued|running|completed|failed)`, `research_brief (text)`, `final_report (text)`, `idea_onepager (jsonb)`, `error (text, nullable)`, `created_at`, `updated_at`.
 - **run_events**: `id`, `run_id (fk)`, `node_name`, `event_type`, `message`, `payload (jsonb)`, `created_at` — full audit log; also used to replay history to a client that connects to SSE after a run has already started.
-- **sources**: `id`, `run_id (fk)`, `tool_name (exa|newsapi|reddit)`, `url`, `title`, `snippet`, `retrieved_at` — every citation surfaced during research, used in the report and the Excel export.
+- **sources**: `id`, `run_id (fk)`, `tool_name (exa|tavily|newsapi|reddit)`, `url`, `title`, `snippet`, `retrieved_at` — every citation surfaced during research, used in the report and the Excel export.
 - **exports**: `id`, `run_id (fk)`, `format (pdf|xlsx)`, `minio_key`, `generated_at`, `status (generating|ready|failed)`.
 
 Schema is managed with Alembic migrations from day one.
@@ -89,6 +89,78 @@ Schema is managed with Alembic migrations from day one.
 - **New Run** page: topic input + optional constraints, submits to `POST /runs`, redirects to the run detail page.
 - **Run Detail** page: live progress panel driven by SSE (current node, which sub-researcher/source is active), then rendered final report and idea one-pager once complete, with Export PDF/Excel buttons (polls export status, then downloads).
 - **History** page: paginated list of past runs (topic, status, date) linking to their detail pages.
+
+## Backend Package Layout
+
+The backend is namespaced under `src/agentdrops` (treating "agentdrops" as the product/company namespace for this and future agents), laid out by responsibility rather than by technical layer alone:
+
+```
+backend/
+  src/agentdrops/
+    __init__.py
+    config.py                 # pydantic-settings Settings
+    logging.py                 # structlog configuration
+    api/
+      __init__.py
+      app.py                   # FastAPI app factory
+      routes/
+        runs.py                 # POST/GET /runs, GET /runs/{id}
+        events.py                # GET /runs/{id}/events (SSE)
+        exports.py               # POST/GET /runs/{id}/export
+      schemas/                  # Pydantic request/response models
+        runs.py
+        exports.py
+    webtools/                   # one file per external search tool
+      __init__.py
+      base.py                    # shared SearchTool protocol/interface + error types
+      exa.py
+      tavily.py
+      news.py                    # NewsAPI
+      reddit.py
+    research/
+      __init__.py
+      graph.py                   # LangGraph StateGraph assembly (supervisor/researcher/report)
+      state.py                    # AgentState, SupervisorState, ResearcherState, etc.
+      prompts.py
+      nodes/
+        write_research_brief.py
+        supervisor.py
+        researcher.py
+        compress_research.py
+        final_report_generation.py
+    idearefine/
+      __init__.py
+      node.py                     # idea_refine_generation graph node
+      schemas.py                   # structured-output models for the 3 phases
+      prompts.py
+    exports/
+      __init__.py
+      pdf.py                       # WeasyPrint rendering
+      xlsx.py                      # openpyxl workbook generation
+    storage/
+      __init__.py
+      postgres/
+        models.py                  # SQLAlchemy models
+        repositories/               # repository-per-aggregate
+          runs.py
+          events.py
+          sources.py
+          exports.py
+      minio_client.py
+    worker/
+      __init__.py
+      main.py                      # arq WorkerSettings
+      tasks.py                     # run_research_job, generate_export_job
+      events.py                     # Redis pub/sub publisher used by graph node callbacks
+  tests/
+    unit/
+    integration/
+  alembic/
+  pyproject.toml
+  Dockerfile
+```
+
+Each `webtools/*.py` module implements the same `SearchTool` interface (defined in `webtools/base.py`): an async `search(query: str) -> list[SearchResult]` method plus tool metadata (name, rate-limit config), so the researcher node can bind them to the LLM as tools uniformly and so each is independently unit-testable against mocked HTTP responses.
 
 ## Production & Code Quality Standards
 
@@ -122,11 +194,11 @@ Schema is managed with Alembic migrations from day one.
 
 ## Deployment (docker-compose)
 
-Services: `postgres`, `minio`, `redis`, `backend` (FastAPI API), `worker` (arq, same image as backend, different entrypoint), `frontend` (Next.js). Environment variables: `ANTHROPIC_API_KEY`, `EXA_API_KEY`, `NEWSAPI_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `DATABASE_URL`, `REDIS_URL`, `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`.
+Services: `postgres`, `minio`, `redis`, `backend` (FastAPI API, built from `backend/`), `worker` (arq, same image as backend, different entrypoint), `frontend` (Next.js). Environment variables: `ANTHROPIC_API_KEY`, `EXA_API_KEY`, `TAVILY_API_KEY`, `NEWSAPI_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `DATABASE_URL`, `REDIS_URL`, `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`.
 
 ## Key Assumptions to Validate
 
-- [ ] Exa + NewsAPI + Reddit's free/dev tiers provide sufficient rate limits for iterative multi-round research — validate during implementation, may need backoff tuning.
+- [ ] Exa + Tavily + NewsAPI + Reddit's free/dev tiers provide sufficient rate limits for iterative multi-round research — validate during implementation, may need backoff tuning.
 - [ ] A headless (non-interactive) idea-refine adaptation still produces useful ideas without the human sharpening-question loop — validate by reviewing early run outputs.
 - [ ] WeasyPrint's system dependencies are acceptable in the target container image — validate in the Dockerfile build.
 
