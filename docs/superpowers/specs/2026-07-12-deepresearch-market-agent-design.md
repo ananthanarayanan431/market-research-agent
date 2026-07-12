@@ -99,7 +99,6 @@ backend/
   src/agentdrops/
     __init__.py
     config.py                 # pydantic-settings Settings
-    logging.py                 # structlog configuration
     api/
       __init__.py
       app.py                   # FastAPI app factory
@@ -117,11 +116,33 @@ backend/
       tavily.py
       news.py                    # NewsAPI
       reddit.py
+    resilience/                 # circuit breakers + retry policies, shared by webtools/research/db
+      __init__.py
+      circuit_breaker.py          # pybreaker registry: get_breaker(name) -> CircuitBreaker, call_with_breaker()
+      http_retry.py                # tenacity policy for HTTP calls (webtools) + wrap_http_errors
+      llm_retry.py                 # tenacity policy for Anthropic LLM calls (rate limit / overload / connection)
+    observability/               # OpenTelemetry: traces, metrics, logs (replaces structlog) — exports to an OTel Collector, which forwards to SigNoz
+      __init__.py
+      setup.py                    # configure_observability(settings): wires tracer/meter/logger providers + resource attrs
+      tracing.py                   # get_tracer(name), traced_span() context manager for per-node/per-call spans
+      metrics.py                    # get_meter(name), counters/histograms for tool calls, LLM calls, node durations
+      logging.py                    # stdlib logging + OTel LoggingHandler bridge, run_id correlation via contextvar
+    prompts/                     # versioned prompt content, decoupled from node logic
+      __init__.py
+      v1/
+        __init__.py
+        research_brief.py
+        supervisor.py
+        researcher.py
+        compress_research.py
+        final_report.py
+        idea_refine_understand.py
+        idea_refine_converge.py
+        idea_refine_sharpen.py
     research/
       __init__.py
       graph.py                   # LangGraph StateGraph assembly (supervisor/researcher/report)
       state.py                    # AgentState, SupervisorState, ResearcherState, etc.
-      prompts.py
       nodes/
         write_research_brief.py
         supervisor.py
@@ -132,12 +153,11 @@ backend/
       __init__.py
       node.py                     # idea_refine_generation graph node
       schemas.py                   # structured-output models for the 3 phases
-      prompts.py
     exports/
       __init__.py
       pdf.py                       # WeasyPrint rendering
       xlsx.py                      # openpyxl workbook generation
-    storage/
+    db/                          # all Postgres + Redis operations live here
       __init__.py
       postgres/
         models.py                  # SQLAlchemy models
@@ -146,6 +166,7 @@ backend/
           events.py
           sources.py
           exports.py
+      redis_client.py               # Redis connection factory (arq broker + pub/sub), used by worker and api/routes/events.py
       minio_client.py
     worker/
       __init__.py
@@ -160,23 +181,31 @@ backend/
   Dockerfile
 ```
 
-Each `webtools/*.py` module implements the same `SearchTool` interface (defined in `webtools/base.py`): an async `search(query: str) -> list[SearchResult]` method plus tool metadata (name, rate-limit config), so the researcher node can bind them to the LLM as tools uniformly and so each is independently unit-testable against mocked HTTP responses.
+Each `webtools/*.py` module implements the same `SearchTool` interface (defined in `webtools/base.py`): an async `search(query: str) -> list[SearchResult]` method plus tool metadata (name, rate-limit config), so the researcher node can bind them to the LLM as tools uniformly and so each is independently unit-testable against mocked HTTP responses. Every external call a tool makes goes through `resilience/`: a per-dependency `pybreaker.CircuitBreaker` (named `"exa"`, `"tavily"`, `"newsapi"`, `"reddit"`, and later `"anthropic"`, wrapping calls so an already-failing dependency fails fast instead of being hammered by retries) wrapping a `tenacity`-based retry policy (`HTTP_RETRY` for HTTP tools, `LLM_RETRY` for Anthropic calls in the research graph) — the breaker sits **outside** the retry so a trip short-circuits the whole retry sequence, not just one attempt.
+
+Prompt content for every graph node and the idea-refine phases lives under `prompts/v1/` as plain, reviewable modules (one prompt per file) rather than embedded in node code — this is the versioning point: a future `prompts/v2/` can be introduced and A/B'd without touching node logic, and node code always imports from a specific version (`from agentdrops.prompts.v1 import supervisor as supervisor_prompts`).
 
 ## Production & Code Quality Standards
 
 - **Python 3.12+, fully typed** — `mypy --strict` in CI; no untyped defs in application code.
 - **Pydantic v2** for every I/O boundary: API request/response models, LangGraph structured-output schemas, config.
 - **`ruff`** for lint + format, run in pre-commit and CI.
-- **Structured logging** (JSON, via `structlog`) correlated by `run_id`, written to stdout for aggregation and mirrored into `run_events` for in-app audit/history.
+- **Observability via OpenTelemetry, not structlog.** Traces (per-node/per-tool-call spans), metrics (call counts, durations, error rates), and logs are all emitted through the OTel SDK — logs go through Python's stdlib `logging` bridged into the OTel Logs pipeline via `LoggingHandler` (so call sites stay plain `logger.info(...)`), and every log record within an active span automatically carries `trace_id`/`span_id` for correlation. All three signals export via OTLP to an OTel Collector sidecar, which forwards to SigNoz. `run_id` correlation (across an entire research run, not just one request) is carried as a span attribute on the run's root span and injected into logs via a contextvar-backed logging filter, replacing the old structlog `bind_run_id`.
+- **Resilience via `pybreaker` + `tenacity`, layered explicitly.** Every external call (search tools now, Anthropic LLM calls and Postgres/Redis later) goes through a named circuit breaker from `resilience/circuit_breaker.py` wrapping a `tenacity` retry policy from `resilience/http_retry.py` or `resilience/llm_retry.py`. The breaker wraps the retry (not the reverse) so a tripped breaker fails fast without re-attempting a known-down dependency.
 - **Config via `pydantic-settings`**, all secrets from environment (`.env` locally, real secret store in deployment) — never hardcoded.
-- **Repository pattern** for Postgres access (one repository per aggregate: runs, events, sources, exports) so the graph/worker code depends on interfaces, not raw SQL, and is unit-testable with fakes.
+- **Repository pattern** for Postgres access (one repository per aggregate: runs, events, sources, exports) so the graph/worker code depends on interfaces, not raw SQL, and is unit-testable with fakes. All Postgres and Redis access lives under `db/`.
 - **Alembic** migrations; schema changes never applied by hand.
-- **`tenacity`**-based retry/backoff on all external HTTP calls (Exa, NewsAPI, Reddit, Anthropic).
 - **Async throughout** the API and worker (SQLAlchemy async engine with pooling, `httpx.AsyncClient`).
 - **Horizontal scalability:** FastAPI instances are stateless (all state in Postgres/Redis/MinIO) and can run behind a load balancer; arq workers scale by adding replicas consuming the same Redis queue; Postgres access goes through a bounded connection pool.
 - **CI gate:** lint, type-check, unit tests, and a mocked-LLM integration test must pass before merge.
 
-## Error Handling & Resilience
+## Resilience
+
+- **Circuit breakers** (`pybreaker`): one named breaker per external dependency (`"exa"`, `"tavily"`, `"newsapi"`, `"reddit"`, `"anthropic"`), each configurable (`fail_max`, `reset_timeout`) via `Settings`. A tripped breaker raises immediately (translated into the same `SearchToolError`-style domain exception the caller already handles) instead of letting the retry policy hammer a dependency that's already down.
+- **Retry policies** (`tenacity`), split by call shape: `HTTP_RETRY` (webtools — 3 attempts, exponential backoff, retries only on 5xx/transport errors, matches the policy already built in Plan 1) and `LLM_RETRY` (Anthropic calls — tuned separately for rate-limit/overload/connection errors raised by the `anthropic` SDK, since LLM failure modes and appropriate backoff differ from a REST API's).
+- Both retry policies are defined once in `resilience/` and consumed by `webtools/`, `research/`, and (in a later plan) `db/` — no ad-hoc retry/circuit-breaker logic anywhere else in the codebase.
+
+## Error Handling
 
 - Search tool failures degrade gracefully (error string returned to the graph, research continues with other sources) rather than failing the whole run.
 - LLM token-limit errors trigger truncate-and-retry in compression/report nodes (bounded retry count).
@@ -194,13 +223,17 @@ Each `webtools/*.py` module implements the same `SearchTool` interface (defined 
 
 ## Deployment (docker-compose)
 
-Services: `postgres`, `minio`, `redis`, `backend` (FastAPI API, built from `backend/`), `worker` (arq, same image as backend, different entrypoint), `frontend` (Next.js). Environment variables: `ANTHROPIC_API_KEY`, `EXA_API_KEY`, `TAVILY_API_KEY`, `NEWSAPI_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `DATABASE_URL`, `REDIS_URL`, `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`.
+Services: `postgres`, `minio`, `redis`, `otel-collector` (OpenTelemetry Collector — receives OTLP from the backend/worker and forwards to SigNoz; SigNoz itself is run separately, not embedded in this compose file, so the collector's exporter endpoint/headers are configurable via env), `backend` (FastAPI API, built from `backend/`), `worker` (arq, same image as backend, different entrypoint), `frontend` (Next.js). Environment variables: `ANTHROPIC_API_KEY`, `EXA_API_KEY`, `TAVILY_API_KEY`, `NEWSAPI_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `DATABASE_URL`, `REDIS_URL`, `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`, `OTEL_EXPORTER_OTLP_ENDPOINT` (points the backend/worker at the local `otel-collector` service), `SIGNOZ_OTLP_ENDPOINT`/`SIGNOZ_INGESTION_KEY` (the collector's own upstream export target).
+
+Only the services that exist as of the current plan are actually defined in `docker-compose.yml` at any given time (`postgres`, `minio`, `redis`, `otel-collector` land with the resilience/observability plan; `backend`, `worker`, `frontend` are appended once their respective Dockerfiles exist) — the file is never left referencing a build context that doesn't exist yet.
 
 ## Key Assumptions to Validate
 
 - [ ] Exa + Tavily + NewsAPI + Reddit's free/dev tiers provide sufficient rate limits for iterative multi-round research — validate during implementation, may need backoff tuning.
 - [ ] A headless (non-interactive) idea-refine adaptation still produces useful ideas without the human sharpening-question loop — validate by reviewing early run outputs.
 - [ ] WeasyPrint's system dependencies are acceptable in the target container image — validate in the Dockerfile build.
+- [ ] `pybreaker` (sync library) integrates cleanly with the fully-async codebase via its `call_async` API — validate during the resilience module's implementation; fall back to running breaker checks in a thread executor if `call_async` proves insufficient.
+- [ ] A SigNoz instance (self-hosted or cloud) is reachable from wherever this stack is deployed, since the `otel-collector` service forwards to it rather than embedding it — validate the OTLP endpoint/ingestion key are configured before relying on traces/metrics/logs in SigNoz.
 
 ## Not Doing (and Why)
 
