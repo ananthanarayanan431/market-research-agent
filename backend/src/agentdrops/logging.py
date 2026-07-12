@@ -6,7 +6,7 @@ from typing import cast
 
 import structlog
 
-_LEVEL_MAP = {
+LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
     "WARNING": logging.WARNING,
@@ -15,7 +15,7 @@ _LEVEL_MAP = {
 
 
 def configure_logging(level: str = "INFO") -> None:
-    numeric_level = _LEVEL_MAP.get(level.upper(), logging.INFO)
+    numeric_level = LEVEL_MAP.get(level.upper(), logging.INFO)
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=numeric_level)
     structlog.configure(
         processors=[
