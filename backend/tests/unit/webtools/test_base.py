@@ -1,15 +1,16 @@
 from datetime import UTC, datetime
 from typing import ClassVar
 
-import httpx
+import pybreaker
+import pytest
 
 from agentdrops.webtools.base import (
     BaseSearchTool,
     SearchResult,
     SearchToolError,
-    is_retryable_http_error,
     parse_epoch_seconds,
     parse_iso_datetime,
+    wrap_http_errors,
 )
 
 
@@ -43,26 +44,19 @@ def test_search_tool_error_message_includes_tool_name() -> None:
     assert error.tool_name == "exa"
 
 
-def test_is_retryable_http_error_transport_error() -> None:
-    assert is_retryable_http_error(httpx.ConnectError("boom")) is True
+async def test_wrap_http_errors_translates_circuit_breaker_error() -> None:
+    with pytest.raises(SearchToolError) as exc_info:
+        async with wrap_http_errors("exa"):
+            raise pybreaker.CircuitBreakerError("breaker open")
+    assert exc_info.value.tool_name == "exa"
+    assert "circuit open" in str(exc_info.value)
 
 
-def test_is_retryable_http_error_5xx() -> None:
-    request = httpx.Request("GET", "https://example.com")
-    response = httpx.Response(503, request=request)
-    exc = httpx.HTTPStatusError("error", request=request, response=response)
-    assert is_retryable_http_error(exc) is True
-
-
-def test_is_retryable_http_error_4xx_not_retried() -> None:
-    request = httpx.Request("GET", "https://example.com")
-    response = httpx.Response(404, request=request)
-    exc = httpx.HTTPStatusError("error", request=request, response=response)
-    assert is_retryable_http_error(exc) is False
-
-
-def test_is_retryable_http_error_other_exception_not_retried() -> None:
-    assert is_retryable_http_error(ValueError("not http")) is False
+async def test_wrap_http_errors_prefixes_circuit_breaker_message() -> None:
+    with pytest.raises(SearchToolError) as exc_info:
+        async with wrap_http_errors("reddit", prefix="token "):
+            raise pybreaker.CircuitBreakerError("breaker open")
+    assert str(exc_info.value) == "[reddit] token circuit open: reddit unavailable"
 
 
 def test_parse_iso_datetime_parses_valid_string() -> None:

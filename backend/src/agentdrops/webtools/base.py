@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import httpx
+import pybreaker
 from pydantic import BaseModel
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 
 class SearchResult(BaseModel):
@@ -31,20 +31,6 @@ class BaseSearchTool(ABC):
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]: ...
 
 
-def is_retryable_http_error(exc: BaseException) -> bool:
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
-    return isinstance(exc, httpx.TransportError)
-
-
-RETRYABLE_HTTP = retry(
-    retry=retry_if_exception(is_retryable_http_error),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    reraise=True,
-)
-
-
 @asynccontextmanager
 async def wrap_http_errors(tool_name: str, *, prefix: str = "") -> AsyncIterator[None]:
     try:
@@ -57,6 +43,8 @@ async def wrap_http_errors(tool_name: str, *, prefix: str = "") -> AsyncIterator
         raise SearchToolError(tool_name, f"{prefix}transport error: {exc}") from exc
     except KeyError as exc:
         raise SearchToolError(tool_name, f"{prefix}malformed response: missing key {exc}") from exc
+    except pybreaker.CircuitBreakerError as exc:
+        raise SearchToolError(tool_name, f"{prefix}circuit open: {tool_name} unavailable") from exc
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
