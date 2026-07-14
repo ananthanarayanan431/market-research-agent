@@ -61,3 +61,29 @@ async def test_news_search_raises_search_tool_error_on_http_error(
         await tool.search("AI note-taking apps")
 
     assert exc_info.value.tool_name == "newsapi"
+
+
+@respx.mock
+async def test_news_search_raises_search_tool_error_when_circuit_open(
+    http_client: httpx.AsyncClient,
+) -> None:
+    respx.get("https://newsapi.org/v2/everything").mock(
+        return_value=httpx.Response(500, json={"status": "error"})
+    )
+    tool = NewsApiSearchTool(api_key="news-test", client=http_client, breaker_fail_max=1)
+
+    with pytest.raises(SearchToolError):
+        await tool.search("first call trips the breaker")
+
+    # the first call above already made HTTP_RETRY's 3 attempts (all 500s)
+    # before the breaker (which wraps the whole retrying call as one unit)
+    # registered its single failure and tripped — so the route's call_count
+    # is already 3, not 0, by this point. Assert the SECOND call adds no
+    # further calls (short-circuits) rather than asserting an absolute 0.
+    route = respx.get("https://newsapi.org/v2/everything")
+    calls_before_second_attempt = route.call_count
+    with pytest.raises(SearchToolError) as exc_info:
+        await tool.search("second call should short-circuit")
+
+    assert "circuit open" in str(exc_info.value)
+    assert route.call_count == calls_before_second_attempt

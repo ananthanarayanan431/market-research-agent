@@ -3,8 +3,9 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
+from agentdrops.resilience.circuit_breaker import call_with_breaker, get_breaker
+from agentdrops.resilience.http_retry import HTTP_RETRY
 from agentdrops.webtools.base import (
-    RETRYABLE_HTTP,
     BaseSearchTool,
     SearchResult,
     parse_epoch_seconds,
@@ -16,7 +17,14 @@ class RedditSearchTool(BaseSearchTool):
     name: ClassVar[str] = "reddit"
 
     def __init__(
-        self, client_id: str, client_secret: str, user_agent: str, client: httpx.AsyncClient
+        self,
+        client_id: str,
+        client_secret: str,
+        user_agent: str,
+        client: httpx.AsyncClient,
+        *,
+        breaker_fail_max: int = 5,
+        breaker_reset_timeout: int = 60,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -24,11 +32,14 @@ class RedditSearchTool(BaseSearchTool):
         self._client = client
         self._token: str | None = None
         self._token_expires_at: datetime | None = None
+        self._breaker = get_breaker(
+            self.name, fail_max=breaker_fail_max, reset_timeout=breaker_reset_timeout
+        )
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
         token = await self._get_access_token()
         async with wrap_http_errors(self.name):
-            payload = await self._call(query, max_results, token)
+            payload = await call_with_breaker(self._breaker, self._call, query, max_results, token)
             results: list[SearchResult] = []
             for child in payload.get("data", {}).get("children", [])[:max_results]:
                 post = child.get("data", {})
@@ -51,14 +62,14 @@ class RedditSearchTool(BaseSearchTool):
             return self._token
 
         async with wrap_http_errors(self.name, prefix="token "):
-            payload = await self._fetch_token()
+            payload = await call_with_breaker(self._breaker, self._fetch_token)
             self._token = payload["access_token"]
             self._token_expires_at = datetime.now(UTC) + timedelta(
                 seconds=payload["expires_in"] - 60
             )
         return self._token
 
-    @RETRYABLE_HTTP
+    @HTTP_RETRY
     async def _fetch_token(self) -> dict[str, Any]:
         response = await self._client.post(
             "https://www.reddit.com/api/v1/access_token",
@@ -69,7 +80,7 @@ class RedditSearchTool(BaseSearchTool):
         response.raise_for_status()
         return cast(dict[str, Any], response.json())
 
-    @RETRYABLE_HTTP
+    @HTTP_RETRY
     async def _call(self, query: str, max_results: int, token: str) -> dict[str, Any]:
         response = await self._client.get(
             "https://oauth.reddit.com/search",

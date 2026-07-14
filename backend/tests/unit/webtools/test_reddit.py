@@ -89,3 +89,34 @@ async def test_reddit_search_raises_search_tool_error_on_token_failure(
         await tool.search("query")
 
     assert exc_info.value.tool_name == "reddit"
+
+
+@respx.mock
+async def test_reddit_search_raises_search_tool_error_when_circuit_open(
+    http_client: httpx.AsyncClient,
+) -> None:
+    respx.post("https://www.reddit.com/api/v1/access_token").mock(
+        return_value=httpx.Response(500, json={"error": "down"})
+    )
+    tool = RedditSearchTool(
+        client_id="cid",
+        client_secret="csecret",
+        user_agent="agentdrops-test/0.1",
+        client=http_client,
+        breaker_fail_max=1,
+    )
+
+    with pytest.raises(SearchToolError):
+        await tool.search("first call trips the breaker")
+
+    # as with the other tools' circuit-open tests: the first call already
+    # made HTTP_RETRY's attempts against the token endpoint before the
+    # breaker tripped, so assert the SECOND call adds no further calls
+    # rather than asserting an absolute 0.
+    token_route = respx.post("https://www.reddit.com/api/v1/access_token")
+    calls_before_second_attempt = token_route.call_count
+    with pytest.raises(SearchToolError) as exc_info:
+        await tool.search("second call should short-circuit")
+
+    assert "circuit open" in str(exc_info.value)
+    assert token_route.call_count == calls_before_second_attempt

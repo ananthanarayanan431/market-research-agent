@@ -2,8 +2,9 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
+from agentdrops.resilience.circuit_breaker import call_with_breaker, get_breaker
+from agentdrops.resilience.http_retry import HTTP_RETRY
 from agentdrops.webtools.base import (
-    RETRYABLE_HTTP,
     BaseSearchTool,
     SearchResult,
     parse_iso_datetime,
@@ -14,13 +15,23 @@ from agentdrops.webtools.base import (
 class NewsApiSearchTool(BaseSearchTool):
     name: ClassVar[str] = "newsapi"
 
-    def __init__(self, api_key: str, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.AsyncClient,
+        *,
+        breaker_fail_max: int = 5,
+        breaker_reset_timeout: int = 60,
+    ) -> None:
         self._api_key = api_key
         self._client = client
+        self._breaker = get_breaker(
+            self.name, fail_max=breaker_fail_max, reset_timeout=breaker_reset_timeout
+        )
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
         async with wrap_http_errors(self.name):
-            payload = await self._call(query, max_results)
+            payload = await call_with_breaker(self._breaker, self._call, query, max_results)
             results: list[SearchResult] = []
             for item in payload.get("articles", [])[:max_results]:
                 results.append(
@@ -35,7 +46,7 @@ class NewsApiSearchTool(BaseSearchTool):
                 )
         return results
 
-    @RETRYABLE_HTTP
+    @HTTP_RETRY
     async def _call(self, query: str, max_results: int) -> dict[str, Any]:
         response = await self._client.get(
             "https://newsapi.org/v2/everything",
