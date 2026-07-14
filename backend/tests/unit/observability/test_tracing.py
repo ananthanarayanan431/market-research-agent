@@ -1,3 +1,4 @@
+import pytest
 from opentelemetry.sdk.resources import SERVICE_NAME
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -21,11 +22,8 @@ def test_traced_span_records_a_finished_span_with_attributes(
 def test_traced_span_records_exception_and_still_ends_span(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    try:
-        with traced_span("failing_node"):
-            raise RuntimeError("boom")
-    except RuntimeError:
-        pass
+    with pytest.raises(RuntimeError), traced_span("failing_node"):
+        raise RuntimeError("boom")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
