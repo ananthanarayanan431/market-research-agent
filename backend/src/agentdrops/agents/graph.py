@@ -47,10 +47,10 @@ def build_market_researcher(
         return {"notes": get_notes_from_tool_calls(result["supervisor_messages"])}
 
     graph = StateGraph[AgentState, None, AgentState, AgentState](AgentState)
-    graph.add_node("clarify_with_user", clarify_with_user)  # type: ignore[call-overload]
-    graph.add_node("write_research_brief", write_research_brief)  # type: ignore[call-overload]
+    graph.add_node("clarify_with_user", clarify_with_user)  # type: ignore
+    graph.add_node("write_research_brief", write_research_brief)  # type: ignore
     graph.add_node("supervisor", supervisor)
-    graph.add_node("final_report_generation", final_report_generation)  # type: ignore[arg-type]
+    graph.add_node("final_report_generation", final_report_generation)  # type: ignore
 
     graph.add_edge(START, "clarify_with_user")
     graph.add_conditional_edges(

@@ -60,16 +60,23 @@ def build_supervisor_graph(
         )
 
     async def supervisor_tools(state: SupervisorState) -> dict[str, object]:
-        """Execute the supervisor's tool calls: reflect inline, fan ConductResearch topics out."""
+        """Execute every tool call from the last turn, in order, so no call is left unresolved."""
         last = state["supervisor_messages"][-1]
         assert isinstance(last, AIMessage)
         research_calls = [c for c in last.tool_calls if c["name"] == "ConductResearch"]
 
-        tool_messages: list[ToolMessage] = list(
-            await asyncio.gather(*(run_topic(c) for c in research_calls))
+        research_results = (
+            await asyncio.gather(*(run_topic(c) for c in research_calls)) if research_calls else []
         )
+        research_by_call_id = {m.tool_call_id: m for m in research_results}
+
+        tool_messages: list[ToolMessage] = []
         for call in last.tool_calls:
-            if call["name"] == "think_tool":
+            if call["name"] == "ConductResearch":
+                call_id = call["id"]
+                assert call_id is not None
+                tool_messages.append(research_by_call_id[call_id])
+            elif call["name"] == "think_tool":
                 reflection = call["args"].get("reflection", "")
                 tool_messages.append(
                     ToolMessage(
@@ -90,11 +97,15 @@ def build_supervisor_graph(
         return {"supervisor_messages": tool_messages}
 
     def should_continue(state: SupervisorState) -> str:
-        """Loop while delegating; stop on ResearchComplete, no tool calls, or the iteration cap."""
+        """Loop while delegating; stop once a turn has no tool calls, or the iteration cap hits.
+
+        `ResearchComplete` does not exit directly: every tool call from that turn (including any
+        `ConductResearch` calls made alongside it) must still be resolved with a `ToolMessage`
+        before the next supervisor turn, or the LLM API rejects the incomplete history. The
+        supervisor naturally ends on its next turn once it sees nothing left to delegate.
+        """
         last = state["supervisor_messages"][-1]
         if not isinstance(last, AIMessage) or not last.tool_calls:
-            return END
-        if any(c["name"] == "ResearchComplete" for c in last.tool_calls):
             return END
         if state.get("research_iterations", 0) >= settings.max_researcher_iterations:
             return END

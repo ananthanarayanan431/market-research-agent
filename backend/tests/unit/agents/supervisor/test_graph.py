@@ -34,12 +34,14 @@ async def test_supervisor_fans_out_conduct_research_and_completes(monkeypatch: o
     complete = AIMessage(
         content="", tool_calls=[{"name": "ResearchComplete", "args": {}, "id": "call-3"}]
     )
-    llm = FakeChatModel([delegate, complete])
+    stop = AIMessage(content="Research is complete, wrapping up.")
+    llm = FakeChatModel([delegate, complete, stop])
     monkeypatch.setattr(  # type: ignore[attr-defined]
         "agentdrops.agents.supervisor.graph.build_llm", lambda settings, **kw: llm
     )
 
-    graph = build_supervisor_graph(make_settings(), _FakeResearchGraph())  # type: ignore[arg-type]
+    settings = make_settings(max_researcher_iterations=5)
+    graph = build_supervisor_graph(settings, _FakeResearchGraph())  # type: ignore[arg-type]
     result = await graph.ainvoke(
         {"supervisor_messages": [], "research_brief": "EV charging", "research_iterations": 0}
     )

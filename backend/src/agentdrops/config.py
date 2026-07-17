@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     """Max research sub-agents the supervisor may fan out concurrently per turn."""
     max_tool_call_iterations: int = 5
     """Research sub-agent ReAct loop cap: forces compression after this many tool-call rounds."""
+    llm_request_timeout_seconds: float = 60.0
+    """Timeout for every Anthropic call, so a stalled API request can't hang a worker forever."""
 
 
 @lru_cache

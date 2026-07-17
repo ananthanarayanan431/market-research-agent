@@ -12,6 +12,6 @@ def build_llm(settings: Settings, *, temperature: float = 0.0) -> ChatAnthropic:
         model_name=settings.research_model,
         api_key=SecretStr(settings.anthropic_api_key),
         temperature=temperature,
-        timeout=None,
+        timeout=settings.llm_request_timeout_seconds,
         stop=None,
     )

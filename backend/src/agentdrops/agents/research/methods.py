@@ -1,5 +1,7 @@
 """Search-result pipeline: dedupe -> summarize -> format, shared by every search tool."""
 
+import asyncio
+
 from langchain_core.language_models import BaseChatModel
 
 from agentdrops.agents.prompts import SUMMARIZE_PROMPT
@@ -46,7 +48,7 @@ async def run_search_pipeline(
     """Search, dedupe, summarize each result, and format — the pipeline behind every search tool."""
     results = await search_tool.search(query, max_results=max_results)
     deduped = deduplicate_search_results(results)
-    summaries = [
-        (result, await summarize_webpage_content(llm, result.snippet)) for result in deduped
-    ]
-    return format_search_output(summaries)
+    summarized = await asyncio.gather(
+        *(summarize_webpage_content(llm, result.snippet) for result in deduped)
+    )
+    return format_search_output(list(zip(deduped, summarized, strict=True)))

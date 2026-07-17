@@ -24,8 +24,11 @@ def build_research_graph(
     async def llm_call(state: ResearcherState) -> dict[str, object]:
         """Ask the model whether to search more on `research_topic` or stop and compress."""
         system = SystemMessage(content=RESEARCH_AGENT_PROMPT.format(date=get_today_str()))
+        is_first_turn = not state["researcher_messages"]
         messages = state["researcher_messages"] or [HumanMessage(content=state["research_topic"])]
         response = await llm_with_tools.ainvoke([system, *messages])
+        if is_first_turn:
+            return {"researcher_messages": [messages[0], response]}
         return {"researcher_messages": [response]}
 
     async def tool_node(state: ResearcherState) -> dict[str, object]:
@@ -34,8 +37,12 @@ def build_research_graph(
         assert isinstance(last, AIMessage)
         outputs = []
         for call in last.tool_calls:
-            result = await tools_by_name[call["name"]].ainvoke(call["args"])
-            outputs.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
+            tool_ = tools_by_name.get(call["name"])
+            if tool_ is None:
+                content = f"Error: tool '{call['name']}' does not exist."
+            else:
+                content = str(await tool_.ainvoke(call["args"]))
+            outputs.append(ToolMessage(content=content, tool_call_id=call["id"]))
         iterations = state.get("tool_call_iterations", 0) + 1
         return {"researcher_messages": outputs, "tool_call_iterations": iterations}
 
