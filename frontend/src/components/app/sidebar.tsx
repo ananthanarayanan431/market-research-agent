@@ -1,12 +1,45 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BarChart3, Plus, Sun, Moon } from "lucide-react";
-import { RECENT_SESSIONS } from "@/lib/mock-data";
+import { listSessions } from "@/lib/api";
+import { SessionSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function Sidebar({ onNewResearch }: { onNewResearch: () => void }) {
+function timeAgo(iso: string): string {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export function Sidebar({
+  onNewResearch,
+  onSelectSession,
+  refreshKey,
+}: {
+  onNewResearch: () => void;
+  onSelectSession: (session: SessionSummary) => void;
+  refreshKey: number;
+}) {
   const [light, setLight] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listSessions()
+      .then((result) => {
+        if (!cancelled) setSessions(result);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const toggleTheme = () => {
     setLight((prev) => {
@@ -45,15 +78,24 @@ export function Sidebar({ onNewResearch }: { onNewResearch: () => void }) {
           RECENT
         </div>
         <ul className="space-y-3">
-          {RECENT_SESSIONS.map((s) => (
-            <li
-              key={s.id}
-              className="cursor-pointer text-sm hover:text-foreground"
-            >
-              <div className="truncate text-foreground/90">{s.title}</div>
-              <div className="text-xs text-muted-foreground">{s.timeAgo}</div>
+          {sessions.map((s) => (
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => onSelectSession(s)}
+                className="w-full text-left text-sm hover:text-foreground"
+              >
+                <div className="truncate text-foreground/90">{s.title}</div>
+                <div className="text-xs text-muted-foreground">
+                  {timeAgo(s.created_at)}
+                  {s.status !== "done" && ` · ${s.status}`}
+                </div>
+              </button>
             </li>
           ))}
+          {sessions.length === 0 && (
+            <li className="text-xs text-muted-foreground">No research yet.</li>
+          )}
         </ul>
       </div>
 

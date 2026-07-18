@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -46,15 +47,19 @@ def build_supervisor_graph(
 
     async def run_topic(call: ToolCall) -> ToolMessage:
         """Run the research sub-agent on one delegated topic, bounded by the concurrency cap."""
+        writer = get_stream_writer()
+        topic = call["args"]["research_topic"]
         async with semaphore:
+            writer({"type": "progress", "step": "researching", "detail": f"Researching: {topic}"})
             result = await research_graph.ainvoke(
                 {
                     "researcher_messages": [],
-                    "research_topic": call["args"]["research_topic"],
+                    "research_topic": topic,
                     "tool_call_iterations": 0,
                     "compressed_research": "",
                 }
             )
+        writer({"type": "source", "topic": topic, "summary": result["compressed_research"][:280]})
         return ToolMessage(
             content=result["compressed_research"], tool_call_id=call["id"], name="ConductResearch"
         )

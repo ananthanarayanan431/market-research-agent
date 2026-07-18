@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CheckCircle2, Loader2 } from "lucide-react";
-import { CLARIFY_CHIPS, PROGRESS_STEPS, SUGGESTIONS } from "@/lib/mock-data";
-import { Message, Phase } from "@/lib/types";
+import { CLARIFY_CHIPS, SUGGESTIONS } from "@/lib/mock-data";
+import { Message, Phase, StreamEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function ChatPanel({
@@ -11,9 +11,9 @@ export function ChatPanel({
   setPhase,
   topic,
   setTopic,
-  stepIndex,
   messages,
   addMessage,
+  sendMessage,
   onStartRun,
   onOpenDrawer,
   onChooseFormat,
@@ -22,9 +22,9 @@ export function ChatPanel({
   setPhase: (p: Phase) => void;
   topic: string | null;
   setTopic: (t: string) => void;
-  stepIndex: number;
   messages: Message[];
   addMessage: (m: Message) => void;
+  sendMessage: (text: string) => Promise<StreamEvent>;
   onStartRun: () => void;
   onOpenDrawer: () => void;
   onChooseFormat: (format: "paragraph" | "table") => void;
@@ -39,19 +39,47 @@ export function ChatPanel({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, phase, stepIndex]);
+  }, [messages, phase]);
 
-  const startTopic = (text: string) => {
+  // `deliveryChosen` is scoped to one research run: reset it whenever the active topic changes
+  // (a new topic, or a different session reopened from the sidebar), otherwise the format
+  // buttons stay hidden on every run after the first. Reset during render (not an effect) per
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const [prevTopic, setPrevTopic] = useState(topic);
+  if (topic !== prevTopic) {
+    setPrevTopic(topic);
+    setDeliveryChosen(null);
+  }
+
+  const startTopic = async (text: string) => {
     if (!text.trim()) return;
     setTopic(text);
     addMessage({ id: crypto.randomUUID(), kind: "user", text });
-    addMessage({
-      id: crypto.randomUUID(),
-      kind: "assistant",
-      text: "Got it. Before I dive in — what region should I focus on, what's the timeframe, and are you more interested in competitors, pricing, or customer demand? Add whatever's relevant below and send, or just hit start.",
-    });
-    setPhase("clarifying");
     setInput("");
+    setPhase("clarifying");
+    try {
+      const event = await sendMessage(text);
+      if (event.type === "clarify") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
+      } else if (event.type === "done") {
+        addMessage({
+          id: crypto.randomUUID(),
+          kind: "assistant",
+          text: "Research complete. How would you like the findings delivered?",
+        });
+        setPhase("complete");
+      } else if (event.type === "error") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
+        setPhase("idle");
+      }
+    } catch {
+      addMessage({
+        id: crypto.randomUUID(),
+        kind: "assistant",
+        text: "Couldn't reach the research agent — please try again.",
+      });
+      setPhase("idle");
+    }
   };
 
   const toggleChip = (chip: string) => {
@@ -64,12 +92,36 @@ export function ChatPanel({
     });
   };
 
-  const submitClarify = () => {
+  const submitClarify = async () => {
     const text = chipAnswer.trim() || "Go ahead and start.";
     addMessage({ id: crypto.randomUUID(), kind: "user", text });
     setChipAnswer("");
     setSelectedChips([]);
     onStartRun();
+    try {
+      const event = await sendMessage(text);
+      if (event.type === "clarify") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
+        setPhase("clarifying");
+      } else if (event.type === "done") {
+        addMessage({
+          id: crypto.randomUUID(),
+          kind: "assistant",
+          text: "Research complete. How would you like the findings delivered?",
+        });
+        setPhase("complete");
+      } else if (event.type === "error") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
+        setPhase("clarifying");
+      }
+    } catch {
+      addMessage({
+        id: crypto.randomUUID(),
+        kind: "assistant",
+        text: "Something went wrong during research — please try again.",
+      });
+      setPhase("clarifying");
+    }
   };
 
   const chooseFormat = (format: "paragraph" | "table") => {
@@ -152,9 +204,7 @@ export function ChatPanel({
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{topic}</div>
                     <div className="text-xs text-muted-foreground">
-                      {phase === "running"
-                        ? `${PROGRESS_STEPS[Math.min(stepIndex, PROGRESS_STEPS.length - 1)].title}...`
-                        : "Research complete"}
+                      {phase === "running" ? "Researching..." : "Research complete"}
                     </div>
                   </div>
                 </button>

@@ -1,14 +1,7 @@
 "use client";
 
 import { CheckCircle2, ChevronDown, Circle, Loader2, X } from "lucide-react";
-import { cn } from "@/lib/utils";
-import {
-  PROGRESS_STEPS,
-  REPORT_SECTIONS,
-  SOURCES,
-  STAT_CARDS,
-  TABLE_ROWS,
-} from "@/lib/mock-data";
+import { ProgressStep, ResearchSource } from "@/lib/types";
 import {
   Table,
   TableBody,
@@ -23,19 +16,20 @@ export type DrawerMode = "progress" | "report" | "table";
 export function ResearchDrawer({
   title,
   mode,
-  stepIndex,
+  steps,
+  sources,
+  report,
+  isRunning,
   onClose,
 }: {
   title: string;
   mode: DrawerMode;
-  stepIndex: number;
+  steps: ProgressStep[];
+  sources: ResearchSource[];
+  report: string | null;
+  isRunning: boolean;
   onClose: () => void;
 }) {
-  const visibleSources =
-    mode === "progress"
-      ? SOURCES.slice(0, Math.max(0, (stepIndex - 1) * 6))
-      : SOURCES;
-
   return (
     <div className="flex h-full w-full flex-col border-l bg-card">
       <div className="flex items-center justify-between border-b px-5 py-3">
@@ -60,52 +54,43 @@ export function ResearchDrawer({
 
       <div className="flex-1 overflow-y-auto px-5 py-5">
         {mode === "progress" && (
-          <ProgressView stepIndex={stepIndex} sources={visibleSources} />
+          <ProgressView steps={steps} sources={sources} isRunning={isRunning} />
         )}
-        {mode === "report" && <ReportView title={title} />}
-        {mode === "table" && <TableViewMode title={title} />}
+        {mode === "report" && (
+          <ReportView title={title} report={report} sourceCount={sources.length} />
+        )}
+        {mode === "table" && <TableViewMode title={title} sources={sources} />}
       </div>
     </div>
   );
 }
 
 function ProgressView({
-  stepIndex,
+  steps,
   sources,
+  isRunning,
 }: {
-  stepIndex: number;
-  sources: typeof SOURCES;
+  steps: ProgressStep[];
+  sources: ResearchSource[];
+  isRunning: boolean;
 }) {
   return (
     <div className="space-y-6">
       <ul className="space-y-3">
-        {PROGRESS_STEPS.map((step, i) => {
-          const status =
-            i < stepIndex ? "done" : i === stepIndex ? "active" : "pending";
+        {steps.map((step, i) => {
+          const isLast = i === steps.length - 1;
+          const status = isLast && isRunning ? "active" : "done";
           return (
-            <li key={step.title} className="flex gap-2">
+            <li key={`${step.title}-${i}`} className="flex gap-2">
               <div className="mt-1 shrink-0">
-                {status === "done" && (
+                {status === "done" ? (
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                )}
-                {status === "active" && (
+                ) : (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-                )}
-                {status === "pending" && (
-                  <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />
                 )}
               </div>
               <div>
-                <div
-                  className={cn(
-                    "text-sm",
-                    status === "pending"
-                      ? "text-muted-foreground"
-                      : "font-medium text-foreground"
-                  )}
-                >
-                  {step.title}
-                </div>
+                <div className="text-sm font-medium text-foreground">{step.title}</div>
                 {status === "active" && step.detail && (
                   <div className="mt-1 text-xs italic text-muted-foreground">
                     {step.detail}
@@ -115,6 +100,12 @@ function ProgressView({
             </li>
           );
         })}
+        {steps.length === 0 && (
+          <li className="flex gap-2">
+            <Circle className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
+            <div className="text-sm text-muted-foreground">Waiting to start...</div>
+          </li>
+        )}
       </ul>
 
       {sources.length > 0 && (
@@ -122,21 +113,19 @@ function ProgressView({
           <div className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground">
             {sources.length} SOURCES REVIEWED
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2">
             {sources.map((s, i) => (
               <div
-                key={`${s.domain}-${i}`}
+                key={`${s.topic}-${i}`}
                 className="flex items-start gap-2 rounded-md border p-2"
               >
                 <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold">
-                  {s.letter}
+                  {s.topic.charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <div className="truncate text-xs font-medium">
-                    {s.domain}
-                  </div>
+                  <div className="truncate text-xs font-medium">{s.topic}</div>
                   <div className="truncate text-[11px] text-muted-foreground">
-                    {s.blurb}
+                    {s.summary}
                   </div>
                 </div>
               </div>
@@ -148,7 +137,15 @@ function ProgressView({
   );
 }
 
-function ReportView({ title }: { title: string }) {
+function ReportView({
+  title,
+  report,
+  sourceCount,
+}: {
+  title: string;
+  report: string | null;
+  sourceCount: number;
+}) {
   return (
     <div className="space-y-6">
       <div>
@@ -156,35 +153,12 @@ function ReportView({ title }: { title: string }) {
           Deep Research: {title}
         </h2>
         <div className="mt-1 text-xs text-muted-foreground">
-          Generated Jul 18, 2026 · 24 sources · confidence: high
+          {sourceCount} sources reviewed
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        {STAT_CARDS.map((card) => (
-          <div key={card.label} className="rounded-md border p-3">
-            <div className="text-[10px] font-medium tracking-wide text-muted-foreground">
-              {card.label}
-            </div>
-            <div className="mt-1 text-xl font-bold">{card.value}</div>
-            <div className="text-[11px] text-emerald-500">{card.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex h-40 items-center justify-center rounded-md border border-dashed bg-muted/30 font-mono text-xs text-muted-foreground">
-        [ market share / competitive landscape chart ]
-      </div>
-
-      <div className="space-y-5">
-        {REPORT_SECTIONS.map((section) => (
-          <div key={section.heading}>
-            <h3 className="mb-1 text-sm font-semibold">{section.heading}</h3>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {section.body}
-            </p>
-          </div>
-        ))}
+      <div className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+        {report ?? "Report not available yet."}
       </div>
 
       <div className="flex gap-2 border-t pt-4">
@@ -199,7 +173,7 @@ function ReportView({ title }: { title: string }) {
   );
 }
 
-function TableViewMode({ title }: { title: string }) {
+function TableViewMode({ title, sources }: { title: string; sources: ResearchSource[] }) {
   return (
     <div className="space-y-6">
       <div>
@@ -207,32 +181,35 @@ function TableViewMode({ title }: { title: string }) {
           Deep Research: {title}
         </h2>
         <div className="mt-1 text-xs text-muted-foreground">
-          Generated Jul 18, 2026 · 24 sources · confidence: high
+          {sources.length} sources reviewed
         </div>
       </div>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Metric</TableHead>
-              <TableHead>Value</TableHead>
-              <TableHead>Source</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {TABLE_ROWS.map((row) => (
-              <TableRow key={row.metric}>
-                <TableCell className="font-medium">{row.metric}</TableCell>
-                <TableCell>{row.value}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {row.source}
-                </TableCell>
+      {sources.length > 0 ? (
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Topic</TableHead>
+                <TableHead>Finding</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {sources.map((s, i) => (
+                <TableRow key={`${s.topic}-${i}`}>
+                  <TableCell className="font-medium">{s.topic}</TableCell>
+                  <TableCell className="text-muted-foreground">{s.summary}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          No sourced findings yet — a structured metric/value breakdown isn&apos;t available
+          until the writer produces one; showing per-topic research findings instead.
+        </div>
+      )}
 
       <div className="flex gap-2 border-t pt-4">
         <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">
