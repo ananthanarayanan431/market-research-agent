@@ -5,7 +5,7 @@ def make_settings(**overrides: object) -> Settings:
     """Build a Settings instance with test-friendly defaults, no real .env file needed."""
     defaults: dict[str, object] = {
         "_env_file": None,
-        "anthropic_api_key": "sk-ant-test",
+        "llm_api_key": "or-test",
         "exa_api_key": "exa-test",
         "tavily_api_key": "tvly-test",
         "newsapi_key": "news-test",

@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from agentdrops.agents.llm import build_llm
+from agentdrops.agents.llm import ainvoke_with_retry, build_llm
 from agentdrops.agents.prompts import COMPRESS_PROMPT, RESEARCH_AGENT_PROMPT, get_today_str
 from agentdrops.agents.state import ResearcherState
 from agentdrops.config import Settings
@@ -26,7 +26,7 @@ def build_research_graph(
         system = SystemMessage(content=RESEARCH_AGENT_PROMPT.format(date=get_today_str()))
         is_first_turn = not state["researcher_messages"]
         messages = state["researcher_messages"] or [HumanMessage(content=state["research_topic"])]
-        response = await llm_with_tools.ainvoke([system, *messages])
+        response = await ainvoke_with_retry(llm_with_tools, [system, *messages])
         if is_first_turn:
             return {"researcher_messages": [messages[0], response]}
         return {"researcher_messages": [response]}
@@ -57,7 +57,7 @@ def build_research_graph(
         """Condense the full message trail into a single research summary for the supervisor."""
         system = SystemMessage(content=COMPRESS_PROMPT)
         closing = HumanMessage(content="Compress the research above into findings on this topic.")
-        response = await llm.ainvoke([system, *state["researcher_messages"], closing])
+        response = await ainvoke_with_retry(llm, [system, *state["researcher_messages"], closing])
         return {"compressed_research": str(response.content)}
 
     graph = StateGraph(ResearcherState)
