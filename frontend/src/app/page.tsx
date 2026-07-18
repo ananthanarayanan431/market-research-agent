@@ -1,43 +1,91 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Sidebar } from "@/components/app/sidebar";
 import { ChatPanel } from "@/components/app/chat-panel";
 import { DrawerMode, ResearchDrawer } from "@/components/app/research-drawer";
-import { PROGRESS_STEPS } from "@/lib/mock-data";
-import { Message, Phase } from "@/lib/types";
+import { getResearchReport, getResearchStatus, streamChat } from "@/lib/api";
+import {
+  Message,
+  Phase,
+  ProgressStep,
+  ResearchSource,
+  SessionSummary,
+  StreamEvent,
+} from "@/lib/types";
 
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [topic, setTopic] = useState<string | null>(null);
-  const [stepIndex, setStepIndex] = useState(0);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [steps, setSteps] = useState<ProgressStep[]>([]);
+  const [sources, setSources] = useState<ResearchSource[]>([]);
+  const [report, setReport] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("progress");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessionsRefresh, setSessionsRefresh] = useState(0);
 
-  const addMessage = (m: Message) =>
-    setMessages((prev) => [...prev, m]);
+  const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
 
-  useEffect(() => {
-    if (phase !== "running") return;
-
-    const timer = setTimeout(() => {
-      if (stepIndex >= PROGRESS_STEPS.length - 1) {
-        setPhase("complete");
-        addMessage({
-          id: crypto.randomUUID(),
-          kind: "assistant",
-          text: "Research complete — 24 sources reviewed with high confidence. How would you like the findings delivered?",
-        });
+  /** Send one chat turn to /chat/stream, folding progress/source events into state as they
+   * arrive, and returning the terminal (clarify | done) event once the stream ends. */
+  const sendMessage = async (text: string): Promise<StreamEvent> => {
+    let terminal: StreamEvent | null = null;
+    await streamChat(text, threadId, (event) => {
+      if (event.type === "progress") {
+        setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
+      } else if (event.type === "source") {
+        setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
       } else {
-        setStepIndex(stepIndex + 1);
+        setThreadId(event.thread_id);
+        if (event.type === "done") setReport(event.report);
+        terminal = event;
       }
-    }, 1100);
-    return () => clearTimeout(timer);
-  }, [phase, stepIndex]);
+    });
+    if (!terminal) throw new Error("/chat/stream ended without a clarify or done event");
+    setSessionsRefresh((prev) => prev + 1);
+    return terminal;
+  };
+
+  /** Reopen a past session from the sidebar: fetch its report if done, else its live status. */
+  const selectSession = async (session: SessionSummary) => {
+    setTopic(session.title);
+    setThreadId(session.id);
+    setMessages([]);
+    setSteps([]);
+    setSources([]);
+    setReport(null);
+    setDrawerOpen(true);
+
+    if (session.status === "done") {
+      try {
+        const { report: fetchedReport, sources: fetchedSources } = await getResearchReport(
+          session.id
+        );
+        setReport(fetchedReport);
+        setSources(fetchedSources);
+        setDrawerMode("report");
+        setPhase("complete");
+      } catch {
+        setPhase("idle");
+      }
+      return;
+    }
+
+    try {
+      const status = await getResearchStatus(session.id);
+      setDrawerMode("progress");
+      setPhase(status.status === "clarifying" ? "clarifying" : "running");
+    } catch {
+      setPhase("idle");
+    }
+  };
 
   const startRun = () => {
-    setStepIndex(0);
+    setSteps([]);
+    setSources([]);
+    setReport(null);
     setPhase("running");
     setDrawerMode("progress");
     setDrawerOpen(true);
@@ -46,7 +94,10 @@ export default function Home() {
   const resetAll = () => {
     setPhase("idle");
     setTopic(null);
-    setStepIndex(0);
+    setThreadId(null);
+    setSteps([]);
+    setSources([]);
+    setReport(null);
     setMessages([]);
     setDrawerOpen(false);
     setDrawerMode("progress");
@@ -54,16 +105,20 @@ export default function Home() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
-      <Sidebar onNewResearch={resetAll} />
+      <Sidebar
+        onNewResearch={resetAll}
+        onSelectSession={selectSession}
+        refreshKey={sessionsRefresh}
+      />
       <div className="flex min-w-0 flex-1">
         <ChatPanel
           phase={phase}
           setPhase={setPhase}
           topic={topic}
           setTopic={setTopic}
-          stepIndex={stepIndex}
           messages={messages}
           addMessage={addMessage}
+          sendMessage={sendMessage}
           onStartRun={startRun}
           onOpenDrawer={() => {
             setDrawerMode("progress");
@@ -79,7 +134,10 @@ export default function Home() {
             <ResearchDrawer
               title={topic}
               mode={drawerMode}
-              stepIndex={stepIndex}
+              steps={steps}
+              sources={sources}
+              report={report}
+              isRunning={phase === "running"}
               onClose={() => setDrawerOpen(false)}
             />
           </div>
