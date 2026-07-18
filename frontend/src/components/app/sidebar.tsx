@@ -79,16 +79,18 @@ export function Sidebar({
         </div>
         <ul className="space-y-3">
           {sessions.map((s) => (
-            <li
-              key={s.id}
-              onClick={() => onSelectSession(s)}
-              className="cursor-pointer text-sm hover:text-foreground"
-            >
-              <div className="truncate text-foreground/90">{s.title}</div>
-              <div className="text-xs text-muted-foreground">
-                {timeAgo(s.created_at)}
-                {s.status !== "done" && ` · ${s.status}`}
-              </div>
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => onSelectSession(s)}
+                className="w-full text-left text-sm hover:text-foreground"
+              >
+                <div className="truncate text-foreground/90">{s.title}</div>
+                <div className="text-xs text-muted-foreground">
+                  {timeAgo(s.created_at)}
+                  {s.status !== "done" && ` · ${s.status}`}
+                </div>
+              </button>
             </li>
           ))}
           {sessions.length === 0 && (

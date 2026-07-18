@@ -1,7 +1,6 @@
 "use client";
 
 import { CheckCircle2, ChevronDown, Circle, Loader2, X } from "lucide-react";
-import { TABLE_ROWS } from "@/lib/mock-data";
 import { ProgressStep, ResearchSource } from "@/lib/types";
 import {
   Table,
@@ -60,7 +59,7 @@ export function ResearchDrawer({
         {mode === "report" && (
           <ReportView title={title} report={report} sourceCount={sources.length} />
         )}
-        {mode === "table" && <TableViewMode title={title} sourceCount={sources.length} />}
+        {mode === "table" && <TableViewMode title={title} sources={sources} />}
       </div>
     </div>
   );
@@ -174,7 +173,7 @@ function ReportView({
   );
 }
 
-function TableViewMode({ title, sourceCount }: { title: string; sourceCount: number }) {
+function TableViewMode({ title, sources }: { title: string; sources: ResearchSource[] }) {
   return (
     <div className="space-y-6">
       <div>
@@ -182,32 +181,35 @@ function TableViewMode({ title, sourceCount }: { title: string; sourceCount: num
           Deep Research: {title}
         </h2>
         <div className="mt-1 text-xs text-muted-foreground">
-          {sourceCount} sources reviewed
+          {sources.length} sources reviewed
         </div>
       </div>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Metric</TableHead>
-              <TableHead>Value</TableHead>
-              <TableHead>Source</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {TABLE_ROWS.map((row) => (
-              <TableRow key={row.metric}>
-                <TableCell className="font-medium">{row.metric}</TableCell>
-                <TableCell>{row.value}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {row.source}
-                </TableCell>
+      {sources.length > 0 ? (
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Topic</TableHead>
+                <TableHead>Finding</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {sources.map((s, i) => (
+                <TableRow key={`${s.topic}-${i}`}>
+                  <TableCell className="font-medium">{s.topic}</TableCell>
+                  <TableCell className="text-muted-foreground">{s.summary}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          No sourced findings yet — a structured metric/value breakdown isn&apos;t available
+          until the writer produces one; showing per-topic research findings instead.
+        </div>
+      )}
 
       <div className="flex gap-2 border-t pt-4">
         <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">

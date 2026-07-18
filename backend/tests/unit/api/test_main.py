@@ -22,24 +22,6 @@ class _FakeGraph:
         self._turns: dict[str, int] = {}
         self._values: dict[str, dict[str, Any]] = {}
 
-    async def ainvoke(self, _inputs: dict, config: dict) -> dict:
-        thread_id = config["configurable"]["thread_id"]
-        turn = self._turns.get(thread_id, 0) + 1
-        self._turns[thread_id] = turn
-        if turn == 1:
-            result = {
-                "messages": [AIMessage(content="Which region should I focus on?")],
-                "needs_clarification": True,
-            }
-        else:
-            result = {
-                "messages": [AIMessage(content="Report attached.")],
-                "needs_clarification": False,
-                "final_report": "# EV Charging Market Report",
-            }
-        self._values.setdefault(thread_id, {}).update(result)
-        return result
-
     async def astream(
         self, _inputs: dict, config: dict, stream_mode: list[str]
     ) -> AsyncIterator[tuple[str, dict]]:
@@ -73,11 +55,35 @@ class _FakeGraph:
         return _StateSnapshot(self._values.get(thread_id, {}))
 
 
+class _FailingGraph:
+    """Fake compiled graph: streams a couple of events, then blows up mid-run."""
+
+    async def astream(
+        self, _inputs: dict, config: dict, stream_mode: list[str]
+    ) -> AsyncIterator[tuple[str, dict]]:
+        yield ("updates", {"clarify_with_user": {"needs_clarification": False, "messages": []}})
+        yield ("updates", {"write_research_brief": {}})
+        raise RuntimeError("LLM provider unavailable")
+
+    async def aget_state(self, config: dict) -> _StateSnapshot:
+        return _StateSnapshot({})
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(
         main_module, "build_market_researcher", lambda settings, client: _FakeGraph()
+    )
+    with TestClient(main_module.app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def failing_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(
+        main_module, "build_market_researcher", lambda settings, client: _FailingGraph()
     )
     with TestClient(main_module.app) as test_client:
         yield test_client
@@ -208,3 +214,45 @@ def test_get_research_report_after_done_returns_report_and_sources(client: TestC
     body = response.json()
     assert body["report"] == "# EV Charging Market Report"
     assert body["sources"] == [{"topic": "EU", "summary": "EU findings"}]
+
+
+def test_chat_persists_sources_same_as_chat_stream(client: TestClient) -> None:
+    """/chat drives the same graph.astream as /chat/stream, so sources aren't dropped."""
+    first = client.post("/chat", json={"message": "Research the EV charging market"})
+    thread_id = first.json()["thread_id"]
+    client.post("/chat", json={"thread_id": thread_id, "message": "Focus on the EU"})
+
+    response = client.get(f"/research/{thread_id}/report")
+
+    assert response.status_code == 200
+    assert response.json()["sources"] == [{"topic": "EU", "summary": "EU findings"}]
+
+
+def test_chat_returns_502_and_marks_session_failed_on_graph_error(
+    failing_client: TestClient,
+) -> None:
+    response = failing_client.post("/chat", json={"message": "Research the EV charging market"})
+
+    assert response.status_code == 502
+
+    sessions = failing_client.get("/research/sessions").json()["sessions"]
+    assert sessions[0]["status"] == "failed"
+
+    status = failing_client.get(f"/research/{sessions[0]['id']}").json()
+    assert status["status"] == "failed"
+
+
+def test_chat_stream_emits_error_event_and_marks_session_failed(
+    failing_client: TestClient,
+) -> None:
+    response = failing_client.post(
+        "/chat/stream", json={"message": "Research the EV charging market"}
+    )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["message"] == "LLM provider unavailable"
+
+    sessions = failing_client.get("/research/sessions").json()["sessions"]
+    assert sessions[0]["status"] == "failed"

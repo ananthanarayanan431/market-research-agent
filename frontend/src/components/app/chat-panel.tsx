@@ -41,6 +41,16 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase]);
 
+  // `deliveryChosen` is scoped to one research run: reset it whenever the active topic changes
+  // (a new topic, or a different session reopened from the sidebar), otherwise the format
+  // buttons stay hidden on every run after the first. Reset during render (not an effect) per
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const [prevTopic, setPrevTopic] = useState(topic);
+  if (topic !== prevTopic) {
+    setPrevTopic(topic);
+    setDeliveryChosen(null);
+  }
+
   const startTopic = async (text: string) => {
     if (!text.trim()) return;
     setTopic(text);
@@ -58,6 +68,9 @@ export function ChatPanel({
           text: "Research complete. How would you like the findings delivered?",
         });
         setPhase("complete");
+      } else if (event.type === "error") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
+        setPhase("idle");
       }
     } catch {
       addMessage({
@@ -97,6 +110,9 @@ export function ChatPanel({
           text: "Research complete. How would you like the findings delivered?",
         });
         setPhase("complete");
+      } else if (event.type === "error") {
+        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
+        setPhase("clarifying");
       }
     } catch {
       addMessage({

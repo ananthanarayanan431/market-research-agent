@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
-Status = Literal["clarifying", "running", "done"]
+Status = Literal["clarifying", "running", "done", "failed"]
 
 
 @dataclass

@@ -49,8 +49,8 @@ def build_supervisor_graph(
         """Run the research sub-agent on one delegated topic, bounded by the concurrency cap."""
         writer = get_stream_writer()
         topic = call["args"]["research_topic"]
-        writer({"type": "progress", "step": "researching", "detail": f"Researching: {topic}"})
         async with semaphore:
+            writer({"type": "progress", "step": "researching", "detail": f"Researching: {topic}"})
             result = await research_graph.ainvoke(
                 {
                     "researcher_messages": [],

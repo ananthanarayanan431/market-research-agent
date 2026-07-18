@@ -25,7 +25,7 @@ class ResearchStatusResponse(BaseModel):
     """Current state of one research thread, read back from the graph's checkpoint."""
 
     thread_id: str
-    status: Literal["clarifying", "running", "done"]
+    status: Literal["clarifying", "running", "done", "failed"]
     research_brief: str | None = None
     report: str | None = None
 
@@ -44,7 +44,7 @@ class SessionSummary(BaseModel):
     id: str
     title: str
     created_at: str
-    status: Literal["clarifying", "running", "done"]
+    status: Literal["clarifying", "running", "done", "failed"]
 
 
 class SessionsResponse(BaseModel):

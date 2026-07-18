@@ -1,6 +1,7 @@
 """FastAPI app exposing the market-research agent over /chat and /chat/stream."""
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from agentdrops.api.schema import (
 )
 from agentdrops.api.sessions import SessionStore
 from agentdrops.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # A session's title is the opening message, trimmed for the sidebar.
 TITLE_MAX_LENGTH = 80
@@ -69,6 +72,46 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+async def _run_graph_turn(
+    graph: Any,
+    inputs: dict[str, Any],
+    config: dict[str, Any],
+    thread_id: str,
+    sessions: SessionStore,
+) -> AsyncIterator[dict[str, Any]]:
+    """Drive one graph turn to completion, yielding every SSE-shaped event along the way.
+
+    The single place that calls `graph.astream` — shared by `/chat` (which only keeps the
+    terminal `clarify`/`done` event) and `/chat/stream` (which forwards every event to the
+    client), so both get the same source-persistence and session-status side effects instead of
+    `/chat` silently dropping the `source` events `/chat/stream` picks up.
+    """
+    async for stream_type, chunk in graph.astream(
+        inputs, config=config, stream_mode=["updates", "custom"]
+    ):
+        if stream_type == "custom":
+            if chunk.get("type") == "source":
+                sessions.add_source(thread_id, chunk["topic"], chunk["summary"])
+            yield chunk
+            continue
+        for node_name, node_output in chunk.items():
+            if node_name == "clarify_with_user" and node_output.get("needs_clarification"):
+                question = str(node_output["messages"][-1].content)
+                sessions.set_status(thread_id, "clarifying")
+                yield {"type": "clarify", "thread_id": thread_id, "response": question}
+                return
+            if node_name == "final_report_generation":
+                report = node_output["final_report"]
+                sessions.set_status(thread_id, "done", report=report)
+                yield {"type": "done", "thread_id": thread_id, "report": report}
+                return
+            if node_name == "supervisor":
+                sessions.set_status(thread_id, "running")
+            label = NODE_LABELS.get(node_name)
+            if label:
+                yield {"type": "progress", "step": label}
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     """Advance one chat turn: clarify, research, and report, resuming state via `thread_id`."""
@@ -76,24 +119,29 @@ async def chat(request: ChatRequest) -> ChatResponse:
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
     sessions: SessionStore = app.state.sessions
     sessions.touch(thread_id, title=request.message[:TITLE_MAX_LENGTH])
-
     graph = app.state.graph
     inputs = {"messages": [HumanMessage(content=request.message)]}
-    result = await graph.ainvoke(inputs, config=config)
 
-    final_report = result.get("final_report")
-    if final_report:
-        sessions.set_status(thread_id, "done", report=final_report)
+    terminal: dict[str, Any] | None = None
+    try:
+        async for event in _run_graph_turn(graph, inputs, config, thread_id, sessions):
+            terminal = event
+    except Exception as exc:
+        logger.exception("chat turn failed for thread_id=%s", thread_id)
+        sessions.set_status(thread_id, "failed")
+        raise HTTPException(
+            status_code=502, detail="Research agent failed to complete this turn"
+        ) from exc
+
+    assert terminal is not None
+    if terminal["type"] == "done":
         return ChatResponse(
             thread_id=thread_id,
-            response=final_report,
+            response=terminal["report"],
             is_followup=False,
-            report=final_report,
+            report=terminal["report"],
         )
-
-    sessions.set_status(thread_id, "clarifying")
-    last_message = result["messages"][-1]
-    return ChatResponse(thread_id=thread_id, response=str(last_message.content), is_followup=True)
+    return ChatResponse(thread_id=thread_id, response=terminal["response"], is_followup=True)
 
 
 @app.post("/chat/stream")
@@ -107,6 +155,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     - `{"type": "clarify", "thread_id": str, "response": str}` — terminal: the agent needs more
       information before it can research; the turn ends here.
     - `{"type": "done", "thread_id": str, "report": str}` — terminal: the final report is ready.
+    - `{"type": "error", "thread_id": str, "message": str}` — terminal: the run failed.
     """
     thread_id = request.thread_id or str(uuid.uuid4())
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
@@ -116,30 +165,13 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     inputs = {"messages": [HumanMessage(content=request.message)]}
 
     async def events() -> AsyncIterator[str]:
-        async for stream_type, chunk in graph.astream(
-            inputs, config=config, stream_mode=["updates", "custom"]
-        ):
-            if stream_type == "custom":
-                if chunk.get("type") == "source":
-                    sessions.add_source(thread_id, chunk["topic"], chunk["summary"])
-                yield _sse(chunk)
-                continue
-            for node_name, node_output in chunk.items():
-                if node_name == "clarify_with_user" and node_output.get("needs_clarification"):
-                    question = str(node_output["messages"][-1].content)
-                    sessions.set_status(thread_id, "clarifying")
-                    yield _sse({"type": "clarify", "thread_id": thread_id, "response": question})
-                    return
-                if node_name == "final_report_generation":
-                    report = node_output["final_report"]
-                    sessions.set_status(thread_id, "done", report=report)
-                    yield _sse({"type": "done", "thread_id": thread_id, "report": report})
-                    return
-                if node_name == "supervisor":
-                    sessions.set_status(thread_id, "running")
-                label = NODE_LABELS.get(node_name)
-                if label:
-                    yield _sse({"type": "progress", "step": label})
+        try:
+            async for event in _run_graph_turn(graph, inputs, config, thread_id, sessions):
+                yield _sse(event)
+        except Exception as exc:
+            logger.exception("chat/stream turn failed for thread_id=%s", thread_id)
+            sessions.set_status(thread_id, "failed")
+            yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -163,7 +195,15 @@ async def list_sessions() -> SessionsResponse:
 
 @app.get("/research/{thread_id}", response_model=ResearchStatusResponse)
 async def get_research_status(thread_id: str) -> ResearchStatusResponse:
-    """Read one thread's current status straight from the graph's checkpoint."""
+    """Read one thread's current status: the session store's `failed` if set, else the graph's
+    own checkpoint (a failed run may leave an incomplete checkpoint the graph can't classify)."""
+    sessions: SessionStore = app.state.sessions
+    session = sessions.get(thread_id)
+    if session is not None and session.status == "failed":
+        return ResearchStatusResponse(
+            thread_id=thread_id, status="failed", research_brief=None, report=None
+        )
+
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
     graph = app.state.graph
     state = await graph.aget_state(config)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Sidebar } from "@/components/app/sidebar";
 import { ChatPanel } from "@/components/app/chat-panel";
 import { DrawerMode, ResearchDrawer } from "@/components/app/research-drawer";
@@ -26,6 +26,11 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionsRefresh, setSessionsRefresh] = useState(0);
 
+  // Bumped on every selectSession call; async work below checks it's still current before
+  // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
+  const selectionTokenRef = useRef(0);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
 
   /** Send one chat turn to /chat/stream, folding progress/source events into state as they
@@ -48,8 +53,44 @@ export default function Home() {
     return terminal;
   };
 
-  /** Reopen a past session from the sidebar: fetch its report if done, else its live status. */
+  /** Poll a reopened session's status every 3s until it leaves running/clarifying, then load
+   * its report. Stops itself once `token` no longer matches the active selection. */
+  const pollUntilSettled = (sessionId: string, token: number) => {
+    if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+    pollTimeoutRef.current = setTimeout(async () => {
+      if (selectionTokenRef.current !== token) return;
+      try {
+        const status = await getResearchStatus(sessionId);
+        if (selectionTokenRef.current !== token) return;
+
+        if (status.status === "done") {
+          const { report: fetchedReport, sources: fetchedSources } =
+            await getResearchReport(sessionId);
+          if (selectionTokenRef.current !== token) return;
+          setReport(fetchedReport);
+          setSources(fetchedSources);
+          setDrawerMode("report");
+          setPhase("complete");
+          return;
+        }
+        if (status.status === "failed") {
+          setPhase("idle");
+          return;
+        }
+        setPhase(status.status === "clarifying" ? "clarifying" : "running");
+        pollUntilSettled(sessionId, token);
+      } catch {
+        if (selectionTokenRef.current === token) setPhase("idle");
+      }
+    }, 3000);
+  };
+
+  /** Reopen a past session from the sidebar: fetch its report if done, else its live status,
+   * polling until it settles if the run is still in flight. */
   const selectSession = async (session: SessionSummary) => {
+    const token = ++selectionTokenRef.current;
+    if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+
     setTopic(session.title);
     setThreadId(session.id);
     setMessages([]);
@@ -63,26 +104,33 @@ export default function Home() {
         const { report: fetchedReport, sources: fetchedSources } = await getResearchReport(
           session.id
         );
+        if (selectionTokenRef.current !== token) return;
         setReport(fetchedReport);
         setSources(fetchedSources);
         setDrawerMode("report");
         setPhase("complete");
       } catch {
-        setPhase("idle");
+        if (selectionTokenRef.current === token) setPhase("idle");
       }
       return;
     }
 
     try {
       const status = await getResearchStatus(session.id);
+      if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
+      if (status.status === "clarifying" || status.status === "running") {
+        pollUntilSettled(session.id, token);
+      }
     } catch {
-      setPhase("idle");
+      if (selectionTokenRef.current === token) setPhase("idle");
     }
   };
 
   const startRun = () => {
+    selectionTokenRef.current += 1;
+    if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     setSteps([]);
     setSources([]);
     setReport(null);
@@ -92,6 +140,8 @@ export default function Home() {
   };
 
   const resetAll = () => {
+    selectionTokenRef.current += 1;
+    if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     setPhase("idle");
     setTopic(null);
     setThreadId(null);

@@ -18,9 +18,10 @@ export type StreamEvent =
   | { type: "progress"; step: string; detail?: string }
   | { type: "source"; topic: string; summary: string }
   | { type: "clarify"; thread_id: string; response: string }
-  | { type: "done"; thread_id: string; report: string };
+  | { type: "done"; thread_id: string; report: string }
+  | { type: "error"; thread_id: string; message: string };
 
-export type ResearchStatusValue = "clarifying" | "running" | "done";
+export type ResearchStatusValue = "clarifying" | "running" | "done" | "failed";
 
 export type SessionSummary = {
   id: string;
