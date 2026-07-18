@@ -1,33 +1,40 @@
-import anthropic
 import httpx
 
 from agentdrops.resilience.llm_retry import is_retryable_llm_error
 
 
-def _status_error(
-    cls: type[anthropic.APIStatusError], status_code: int
-) -> anthropic.APIStatusError:
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx.Response(status_code, request=request, json={"error": {"message": "x"}})
-    return cls("error", response=response, body=None)
+class _FakeAPIError(Exception):
+    """Stands in for any provider SDK's status-carrying error (openai/anthropic/google-genai)."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__("error")
+        self.status_code = status_code
+
+
+class _FakeAPIConnectionError(Exception):
+    """Mimics the `*APIConnectionError` naming convention shared across provider SDKs."""
 
 
 def test_is_retryable_llm_error_rate_limit() -> None:
-    assert is_retryable_llm_error(_status_error(anthropic.RateLimitError, 429)) is True
+    assert is_retryable_llm_error(_FakeAPIError(429)) is True
 
 
-def test_is_retryable_llm_error_internal_server_error() -> None:
-    assert is_retryable_llm_error(_status_error(anthropic.InternalServerError, 500)) is True
-
-
-def test_is_retryable_llm_error_connection_error() -> None:
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    assert is_retryable_llm_error(anthropic.APIConnectionError(request=request)) is True
+def test_is_retryable_llm_error_server_errors() -> None:
+    for status_code in (500, 502, 503, 504):
+        assert is_retryable_llm_error(_FakeAPIError(status_code)) is True
 
 
 def test_is_retryable_llm_error_bad_request_not_retried() -> None:
-    assert is_retryable_llm_error(_status_error(anthropic.BadRequestError, 400)) is False
+    assert is_retryable_llm_error(_FakeAPIError(400)) is False
+
+
+def test_is_retryable_llm_error_connection_error_by_class_name() -> None:
+    assert is_retryable_llm_error(_FakeAPIConnectionError()) is True
+
+
+def test_is_retryable_llm_error_httpx_transport_error() -> None:
+    assert is_retryable_llm_error(httpx.ConnectError("boom")) is True
 
 
 def test_is_retryable_llm_error_other_exception_not_retried() -> None:
-    assert is_retryable_llm_error(ValueError("not anthropic")) is False
+    assert is_retryable_llm_error(ValueError("unrelated")) is False

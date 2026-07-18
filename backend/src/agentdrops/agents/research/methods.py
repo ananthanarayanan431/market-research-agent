@@ -4,6 +4,7 @@ import asyncio
 
 from langchain_core.language_models import BaseChatModel
 
+from agentdrops.agents.llm import ainvoke_with_retry
 from agentdrops.agents.prompts import SUMMARIZE_PROMPT
 from agentdrops.agents.schemas import Summary
 from agentdrops.webtools.base import BaseSearchTool, SearchResult
@@ -25,7 +26,9 @@ async def summarize_webpage_content(llm: BaseChatModel, content: str) -> Summary
     """Summarize one page's content via LLM; falls back to a truncated excerpt on failure."""
     try:
         structured = llm.with_structured_output(Summary)
-        summary = await structured.ainvoke(SUMMARIZE_PROMPT.format(content=content[:8000]))
+        summary = await ainvoke_with_retry(
+            structured, SUMMARIZE_PROMPT.format(content=content[:8000])
+        )
         return summary if isinstance(summary, Summary) else Summary.model_validate(summary)
     except Exception:
         return Summary(summary=content[:1000], key_excerpts="")

@@ -11,18 +11,24 @@ dependencies = [
     "pybreaker>=1.2",
     "tornado>=6.4",
     "langgraph>=0.2",
+    "langchain>=0.3",
     "langchain-core>=0.3",
-    "langchain-anthropic>=0.2",
+    "langchain-openai>=0.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "anthropic>=0.40",
+    "openai>=1.50",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
 ]
 
 [project.optional-dependencies]
+providers = [
+    "langchain-anthropic>=0.2",
+    "langchain-google-genai>=2.0",
+]
 dev = [
+    "agentdrops[providers]",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
@@ -54,7 +60,14 @@ module = "respx.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["langchain_core.*", "langchain_anthropic.*", "langgraph.*"]
+module = [
+    "langchain.*",
+    "langchain_core.*",
+    "langchain_openai.*",
+    "langchain_anthropic.*",
+    "langchain_google_genai.*",
+    "langgraph.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

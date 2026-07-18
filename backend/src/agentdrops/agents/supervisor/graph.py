@@ -8,7 +8,7 @@ from langchain_core.messages.tool import ToolCall
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from agentdrops.agents.llm import build_llm
+from agentdrops.agents.llm import ainvoke_with_retry, build_llm
 from agentdrops.agents.prompts import LEAD_RESEARCHER_PROMPT, get_today_str
 from agentdrops.agents.state import SupervisorState
 from agentdrops.agents.tools import ConductResearch, ResearchComplete, think_tool
@@ -40,7 +40,7 @@ def build_supervisor_graph(
                 max_concurrent=settings.max_concurrent_researchers,
             )
         )
-        response = await llm.ainvoke([system, *state["supervisor_messages"]])
+        response = await ainvoke_with_retry(llm, [system, *state["supervisor_messages"]])
         iterations = state.get("research_iterations", 0) + 1
         return {"supervisor_messages": [response], "research_iterations": iterations}
 

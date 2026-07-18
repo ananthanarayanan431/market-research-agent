@@ -11,7 +11,7 @@ from agentdrops.webtools.tavily import TavilySearchTool
 def _settings() -> Settings:
     return Settings(
         _env_file=None,
-        anthropic_api_key="sk-ant-test",
+        llm_api_key="or-test",
         exa_api_key="exa-test",
         tavily_api_key="tvly-test",
         newsapi_key="news-test",

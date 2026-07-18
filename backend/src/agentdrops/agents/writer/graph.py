@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 
 from langchain_core.messages import SystemMessage
 
-from agentdrops.agents.llm import build_llm
+from agentdrops.agents.llm import ainvoke_with_retry, build_llm
 from agentdrops.agents.prompts import FINAL_REPORT_PROMPT, get_today_str
 from agentdrops.agents.state import AgentState
 from agentdrops.config import Settings
@@ -22,7 +22,7 @@ def build_writer_node(settings: Settings) -> WriterNode:
         prompt = FINAL_REPORT_PROMPT.format(
             date=get_today_str(), research_brief=state["research_brief"], findings=findings
         )
-        response = await llm.ainvoke([SystemMessage(content=prompt)])
+        response = await ainvoke_with_retry(llm, [SystemMessage(content=prompt)])
         return {"final_report": str(response.content)}
 
     return final_report_generation
