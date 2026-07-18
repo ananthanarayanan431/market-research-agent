@@ -3,13 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CheckCircle2, Loader2 } from "lucide-react";
 import { CLARIFY_CHIPS, PROGRESS_STEPS, SUGGESTIONS } from "@/lib/mock-data";
+import { Message, Phase } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-export type Phase = "idle" | "clarifying" | "running" | "complete" | "delivered";
-
-type Message =
-  | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; text: string };
 
 export function ChatPanel({
   phase,
@@ -17,6 +12,9 @@ export function ChatPanel({
   topic,
   setTopic,
   stepIndex,
+  messages,
+  addMessage,
+  onStartRun,
   onOpenDrawer,
   onChooseFormat,
 }: {
@@ -25,10 +23,12 @@ export function ChatPanel({
   topic: string | null;
   setTopic: (t: string) => void;
   stepIndex: number;
+  messages: Message[];
+  addMessage: (m: Message) => void;
+  onStartRun: () => void;
   onOpenDrawer: () => void;
   onChooseFormat: (format: "paragraph" | "table") => void;
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [chipAnswer, setChipAnswer] = useState("");
   const [selectedChips, setSelectedChips] = useState<string[]>([]);
@@ -40,9 +40,6 @@ export function ChatPanel({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase, stepIndex]);
-
-  const addMessage = (m: Message) =>
-    setMessages((prev) => [...prev, m]);
 
   const startTopic = (text: string) => {
     if (!text.trim()) return;
@@ -72,21 +69,8 @@ export function ChatPanel({
     addMessage({ id: crypto.randomUUID(), kind: "user", text });
     setChipAnswer("");
     setSelectedChips([]);
-    setPhase("running");
-    onOpenDrawer();
+    onStartRun();
   };
-
-  const [prevPhase, setPrevPhase] = useState<Phase>(phase);
-  if (prevPhase !== phase) {
-    setPrevPhase(phase);
-    if (phase === "complete" && deliveryChosen === null) {
-      addMessage({
-        id: crypto.randomUUID(),
-        kind: "assistant",
-        text: "Research complete — 24 sources reviewed with high confidence. How would you like the findings delivered?",
-      });
-    }
-  }
 
   const chooseFormat = (format: "paragraph" | "table") => {
     setDeliveryChosen(format);
