@@ -1,4 +1,6 @@
-"""Request/response contracts for the chat HTTP endpoint."""
+"""Request/response contracts for the chat and research HTTP endpoints."""
+
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -17,3 +19,33 @@ class ChatResponse(BaseModel):
     response: str
     is_followup: bool
     report: str | None = None
+
+
+class ResearchStatusResponse(BaseModel):
+    """Current state of one research thread, read back from the graph's checkpoint."""
+
+    thread_id: str
+    status: Literal["clarifying", "running", "done"]
+    research_brief: str | None = None
+    report: str | None = None
+
+
+class ReportResponse(BaseModel):
+    """A completed thread's report, for reopening the drawer without re-running research."""
+
+    thread_id: str
+    report: str
+    sources: list[dict[str, str]]
+
+
+class SessionSummary(BaseModel):
+    """One row in the recent-sessions sidebar."""
+
+    id: str
+    title: str
+    created_at: str
+    status: Literal["clarifying", "running", "done"]
+
+
+class SessionsResponse(BaseModel):
+    sessions: list[SessionSummary]
