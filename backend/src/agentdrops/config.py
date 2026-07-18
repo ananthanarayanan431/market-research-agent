@@ -22,6 +22,17 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    research_model: str = "claude-sonnet-5"
+    """Anthropic model id used by every agent node (single source, see agents/llm.py)."""
+    max_researcher_iterations: int = 6
+    """Supervisor loop cap: forces END after this many supervisor turns."""
+    max_concurrent_researchers: int = 3
+    """Max research sub-agents the supervisor may fan out concurrently per turn."""
+    max_tool_call_iterations: int = 5
+    """Research sub-agent ReAct loop cap: forces compression after this many tool-call rounds."""
+    llm_request_timeout_seconds: float = 60.0
+    """Timeout for every Anthropic call, so a stalled API request can't hang a worker forever."""
+
 
 @lru_cache
 def get_settings() -> Settings:
