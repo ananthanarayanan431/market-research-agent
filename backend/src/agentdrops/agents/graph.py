@@ -1,16 +1,17 @@
 """Top-level pipeline: clarify -> brief -> supervisor -> writer, compiled as one LangGraph graph."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from agentdrops.agents.llm import build_llm
 from agentdrops.agents.research.graph import build_research_graph
 from agentdrops.agents.scope.graph import build_scope_nodes, route_after_clarify
-from agentdrops.agents.state import AgentState
+from agentdrops.agents.state import AgentState, SupervisorState
 from agentdrops.agents.supervisor.graph import build_supervisor_graph, get_notes_from_tool_calls
 from agentdrops.agents.tools import make_tavily_tool, think_tool
 from agentdrops.agents.writer.graph import build_writer_node
@@ -36,15 +37,29 @@ def build_market_researcher(
     final_report_generation = build_writer_node(settings)
 
     async def supervisor(state: AgentState) -> dict[str, object]:
-        """Run the supervisor subgraph to completion and surface its findings as `notes`."""
-        result = await supervisor_graph.ainvoke(
+        """Run the supervisor subgraph to completion and surface its findings as `notes`.
+
+        Streamed via `astream` (not `ainvoke`) and re-emitted through this node's own writer:
+        a bare nested `ainvoke()` starts an isolated run whose `custom` writes (the
+        progress/source events `run_topic` emits) would otherwise never reach the outer
+        `/chat/stream` consumer — nothing drains them without a stream loop over this call.
+        """
+        writer = get_stream_writer()
+        final_state: SupervisorState | None = None
+        async for stream_type, chunk in supervisor_graph.astream(
             {
                 "supervisor_messages": state["supervisor_messages"],
                 "research_brief": state["research_brief"],
                 "research_iterations": 0,
-            }
-        )
-        return {"notes": get_notes_from_tool_calls(result["supervisor_messages"])}
+            },
+            stream_mode=["custom", "values"],
+        ):
+            if stream_type == "custom":
+                writer(chunk)
+            else:
+                final_state = cast(SupervisorState, chunk)
+        assert final_state is not None
+        return {"notes": get_notes_from_tool_calls(final_state["supervisor_messages"])}
 
     graph = StateGraph[AgentState, None, AgentState, AgentState](AgentState)
     graph.add_node("clarify_with_user", clarify_with_user)  # type: ignore
