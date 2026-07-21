@@ -15,11 +15,12 @@ import {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
 
-// Browsers cannot speak OTLP/gRPC, so the frontend ships to SigNoz's OTLP *HTTP* port (4318)
-// while the backend uses gRPC (4317). Same ingester either way.
+// Browsers cannot speak OTLP/gRPC (backend uses gRPC :4317) and a direct cross-origin POST to
+// the collector's HTTP port is blocked by CORS. So spans go to a same-origin path that
+// next.config.ts rewrites to the collector's OTLP/HTTP endpoint (:4318). Override only if you
+// front the collector yourself with CORS configured.
 const OTLP_ENDPOINT =
-  process.env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT ??
-  "http://localhost:4318";
+  process.env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT ?? "/otel";
 
 const SERVICE_NAME =
   process.env.NEXT_PUBLIC_OTEL_SERVICE_NAME ?? "agentdrops-frontend";
