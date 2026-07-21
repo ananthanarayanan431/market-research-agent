@@ -9,8 +9,10 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Tracer
 
 
-def configure_tracing(service_name: str, otlp_endpoint: str) -> TracerProvider:
-    resource = Resource.create({SERVICE_NAME: service_name})
+def configure_tracing(
+    service_name: str, otlp_endpoint: str, resource: Resource | None = None
+) -> TracerProvider:
+    resource = resource or Resource.create({SERVICE_NAME: service_name})
     provider = TracerProvider(resource=resource)
     exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
     provider.add_span_processor(BatchSpanProcessor(exporter))

@@ -16,6 +16,9 @@ def make_settings(**overrides: object) -> Settings:
         "minio_endpoint": "localhost:9000",
         "minio_access_key": "minioadmin",
         "minio_secret_key": "minioadmin",
+        # Tests must never reach for a collector: exporters would retry in background threads,
+        # slow the suite down, and pollute real SigNoz data with fixture traffic.
+        "otel_enabled": False,
         "max_researcher_iterations": 2,
         "max_concurrent_researchers": 2,
         "max_tool_call_iterations": 2,

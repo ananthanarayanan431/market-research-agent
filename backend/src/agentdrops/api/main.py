@@ -24,6 +24,9 @@ from agentdrops.api.schema import (
 )
 from agentdrops.api.sessions import SessionStore
 from agentdrops.config import get_settings
+from agentdrops.observability.logging import bind_run_id
+from agentdrops.observability.setup import configure_observability, instrument_fastapi
+from agentdrops.observability.tracing import traced_span
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +49,25 @@ def _sse(payload: dict[str, Any]) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Build the shared httpx client, compiled graph, and session registry, once per process."""
+    """Build the shared httpx client, compiled graph, and session registry, once per process.
+
+    Telemetry is configured *before* the httpx client and the graph are built: both the httpx
+    and LangChain instrumentors patch at import/class level, so anything constructed ahead of
+    them would never be traced.
+    """
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        app.state.graph = build_market_researcher(settings, client)
-        app.state.sessions = SessionStore()
-        yield
+    providers = configure_observability(settings)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            app.state.graph = build_market_researcher(settings, client)
+            app.state.sessions = SessionStore()
+            yield
+    finally:
+        providers.shutdown()
 
 
 app = FastAPI(title="Agentdrops Market Research Agent", lifespan=lifespan)
+instrument_fastapi(app)
 
 # Dev-only: the Next.js frontend runs on a different origin (localhost:3000) and streams
 # /chat/stream via fetch, which requires CORS headers even for same-machine requests.
@@ -85,31 +98,45 @@ async def _run_graph_turn(
     terminal `clarify`/`done` event) and `/chat/stream` (which forwards every event to the
     client), so both get the same source-persistence and session-status side effects instead of
     `/chat` silently dropping the `source` events `/chat/stream` picks up.
+
+    The whole turn runs inside one `research.turn` span, and inside `bind_run_id(thread_id)` so
+    every log line emitted anywhere in the graph carries the thread it belongs to — that is what
+    makes a single run filterable end-to-end in SigNoz.
     """
-    async for stream_type, chunk in graph.astream(
-        inputs, config=config, stream_mode=["updates", "custom"]
-    ):
-        if stream_type == "custom":
-            if chunk.get("type") == "source":
-                sessions.add_source(thread_id, chunk["topic"], chunk["summary"])
-            yield chunk
-            continue
-        for node_name, node_output in chunk.items():
-            if node_name == "clarify_with_user" and node_output.get("needs_clarification"):
-                question = str(node_output["messages"][-1].content)
-                sessions.set_status(thread_id, "clarifying")
-                yield {"type": "clarify", "thread_id": thread_id, "response": question}
-                return
-            if node_name == "final_report_generation":
-                report = node_output["final_report"]
-                sessions.set_status(thread_id, "done", report=report)
-                yield {"type": "done", "thread_id": thread_id, "report": report}
-                return
-            if node_name == "supervisor":
-                sessions.set_status(thread_id, "running")
-            label = NODE_LABELS.get(node_name)
-            if label:
-                yield {"type": "progress", "step": label}
+    with bind_run_id(thread_id), traced_span("research.turn", thread_id=thread_id) as span:
+        outcome = "incomplete"
+        try:
+            async for stream_type, chunk in graph.astream(
+                inputs, config=config, stream_mode=["updates", "custom"]
+            ):
+                if stream_type == "custom":
+                    if chunk.get("type") == "source":
+                        sessions.add_source(thread_id, chunk["topic"], chunk["summary"])
+                        span.add_event("research.source", {"topic": chunk["topic"]})
+                    yield chunk
+                    continue
+                for node_name, node_output in chunk.items():
+                    if node_name == "clarify_with_user" and node_output.get("needs_clarification"):
+                        question = str(node_output["messages"][-1].content)
+                        sessions.set_status(thread_id, "clarifying")
+                        outcome = "clarify"
+                        yield {"type": "clarify", "thread_id": thread_id, "response": question}
+                        return
+                    if node_name == "final_report_generation":
+                        report = node_output["final_report"]
+                        sessions.set_status(thread_id, "done", report=report)
+                        outcome = "done"
+                        span.set_attribute("research.report_chars", len(report))
+                        yield {"type": "done", "thread_id": thread_id, "report": report}
+                        return
+                    if node_name == "supervisor":
+                        sessions.set_status(thread_id, "running")
+                    label = NODE_LABELS.get(node_name)
+                    if label:
+                        span.add_event("research.stage", {"stage": label})
+                        yield {"type": "progress", "step": label}
+        finally:
+            span.set_attribute("research.outcome", outcome)
 
 
 @app.post("/chat", response_model=ChatResponse)

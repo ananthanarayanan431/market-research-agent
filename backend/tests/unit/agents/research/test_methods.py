@@ -59,6 +59,8 @@ def test_format_search_output_handles_no_results() -> None:
 
 async def test_run_search_pipeline_dedupes_and_formats() -> None:
     class _FakeTool:
+        name = "fake"
+
         async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
             return [_result("https://a.com"), _result("https://a.com")]
 

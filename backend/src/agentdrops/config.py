@@ -48,6 +48,16 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    otel_enabled: bool = True
+    """Master switch for telemetry. Off in tests/CI so no exporter reaches for a collector."""
+    otel_service_name: str = "agentdrops-backend"
+    """`service.name` resource attribute — this is how the service appears in SigNoz."""
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    """SigNoz ingester's OTLP gRPC endpoint. Host-run apps use localhost; containers on
+    signoz-network use http://signoz-ingester:4317."""
+    otel_environment: str = "development"
+    """`deployment.environment` resource attribute — a dimension SigNoz aggregates on."""
+
     research_model: str = "anthropic/claude-sonnet-5"
     """OpenRouter model id used by every agent node (single source, see agents/llm.py)."""
     max_researcher_iterations: int = 6

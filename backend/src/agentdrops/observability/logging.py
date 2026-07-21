@@ -24,9 +24,14 @@ class _RunIdFilter(logging.Filter):
         return True
 
 
-def configure_logging(service_name: str, otlp_endpoint: str, level: str = "INFO") -> LoggerProvider:
+def configure_logging(
+    service_name: str,
+    otlp_endpoint: str,
+    level: str = "INFO",
+    resource: Resource | None = None,
+) -> LoggerProvider:
     numeric_level = _LEVEL_MAP.get(level.upper(), logging.INFO)
-    resource = Resource.create({SERVICE_NAME: service_name})
+    resource = resource or Resource.create({SERVICE_NAME: service_name})
     provider = LoggerProvider(resource=resource)
     exporter = OTLPLogExporter(endpoint=otlp_endpoint, insecure=True)
     provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
