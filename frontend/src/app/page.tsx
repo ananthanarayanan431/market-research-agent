@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/app/sidebar";
 import { ChatPanel } from "@/components/app/chat-panel";
 import { DrawerMode, ResearchDrawer } from "@/components/app/research-drawer";
 import { getResearchReport, getResearchStatus, streamChat } from "@/lib/api";
+import { withSpan } from "@/lib/telemetry";
 import {
   Message,
   Phase,
@@ -35,23 +36,35 @@ export default function Home() {
 
   /** Send one chat turn to /chat/stream, folding progress/source events into state as they
    * arrive, and returning the terminal (clarify | done) event once the stream ends. */
-  const sendMessage = async (text: string): Promise<StreamEvent> => {
-    let terminal: StreamEvent | null = null;
-    await streamChat(text, threadId, (event) => {
-      if (event.type === "progress") {
-        setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
-      } else if (event.type === "source") {
-        setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
-      } else {
-        setThreadId(event.thread_id);
-        if (event.type === "done") setReport(event.report);
-        terminal = event;
+  const sendMessage = async (text: string): Promise<StreamEvent> =>
+    withSpan(
+      "research.submit",
+      { "research.is_followup": threadId !== null },
+      async (span) => {
+        let terminal: StreamEvent | null = null;
+        let sourceCount = 0;
+        await streamChat(text, threadId, (event) => {
+          if (event.type === "progress") {
+            setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
+          } else if (event.type === "source") {
+            sourceCount += 1;
+            setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
+          } else {
+            setThreadId(event.thread_id);
+            if (event.type === "done") setReport(event.report);
+            terminal = event;
+          }
+        });
+        if (!terminal) throw new Error("/chat/stream ended without a clarify or done event");
+        // `terminal` is narrowed to never by the closure assignment above; TS can't see that
+        // the callback ran, so re-widen before reading its fields.
+        const settled = terminal as StreamEvent;
+        span.setAttribute("research.outcome", settled.type);
+        span.setAttribute("research.sources", sourceCount);
+        setSessionsRefresh((prev) => prev + 1);
+        return settled;
       }
-    });
-    if (!terminal) throw new Error("/chat/stream ended without a clarify or done event");
-    setSessionsRefresh((prev) => prev + 1);
-    return terminal;
-  };
+    );
 
   /** Poll a reopened session's status every 3s until it leaves running/clarifying, then load
    * its report. Stops itself once `token` no longer matches the active selection. */
