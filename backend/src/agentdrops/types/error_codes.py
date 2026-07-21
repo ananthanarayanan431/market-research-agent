@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class Error(BaseModel):
     code: int = Field(..., description="Error code")
     description: str = Field(..., description="Error description")
-    message: str | None = Field(None, description="Custom Error message")
+    message: str | None = Field(default=None, description="Custom Error message")
 
 
 class NotFoundError(Error):
@@ -38,7 +38,7 @@ class BadGatewayError(Error):
 
 
 class ValidationError(Error):
-    code: int = status.HTTP_422_UNPROCESSABLE_ENTITY
+    code: int = status.HTTP_422_UNPROCESSABLE_CONTENT
     description: str = "Validation Error"
 
 
@@ -47,7 +47,7 @@ fastAPIErrorResponseModels: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: {"model": UnauthorizedError},
     status.HTTP_404_NOT_FOUND: {"model": NotFoundError},
     status.HTTP_409_CONFLICT: {"model": EnityConflictError},
-    status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": ValidationError},
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationError},
     status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": Error},
     status.HTTP_502_BAD_GATEWAY: {"model": BadGatewayError},
 }

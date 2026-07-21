@@ -10,7 +10,7 @@ PYTEST      := $(VENV)/bin/pytest
 RUFF        := $(VENV)/bin/ruff
 MYPY        := $(VENV)/bin/mypy
 
-APP         := agentdrops.api.main:app
+APP         := agentdrops.main:app
 HOST        ?= 0.0.0.0
 # Port 8001, not 8000: SigNoz's MCP server owns 8000 (see casting.yaml / frontend/src/lib/api.ts).
 PORT        ?= 8001

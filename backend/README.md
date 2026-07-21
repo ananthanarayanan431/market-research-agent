@@ -38,7 +38,7 @@ Starts postgres (5432), redis (6379), minio (9000, console 9001) with creds matc
 ## Run
 
 ```bash
-uvicorn agentdrops.api.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8000
 ```
 
 - `GET /health` — liveness probe.

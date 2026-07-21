@@ -1,0 +1,33 @@
+name: PR Auto-Assign
+
+# GitHub never auto-sets an assignee on a new PR, so this closes that gap: assign the PR
+# to whoever opened it, unless it already has an assignee (e.g. set manually, or on reopen).
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  assign-author:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign PR to its author
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.assignees.length > 0) {
+              core.info(`PR #${pr.number} already has assignee(s), skipping`);
+              return;
+            }
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              assignees: [pr.user.login],
+            });
+            core.info(`Assigned PR #${pr.number} to @${pr.user.login}`);

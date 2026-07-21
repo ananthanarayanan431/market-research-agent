@@ -8,7 +8,7 @@ from .error_codes import Error
 
 class Response[DataT](BaseModel):
     success: bool = Field(..., description="Success status of the response")
-    data: DataT | None = Field(None, description="Data to return in the response of type T")
+    data: DataT | None = Field(default=None, description="Data to return in the response of type T")
 
 
 class SuccessResponse[DataT](Response[DataT]):
