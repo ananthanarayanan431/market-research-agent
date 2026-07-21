@@ -54,16 +54,38 @@ def build_writer_node(settings: Settings) -> WriterNode:
             min_sections=settings.report_min_sections,
             max_sections=settings.report_max_sections,
         )
-        plan = await ainvoke_with_retry(plan_llm, [SystemMessage(content=plan_prompt)])
-        assert isinstance(plan, ReportPlan)
-        sections = plan.sections or [
+        raw_plan = await ainvoke_with_retry(plan_llm, [SystemMessage(content=plan_prompt)])
+        try:
+            plan = (
+                raw_plan
+                if isinstance(raw_plan, ReportPlan)
+                else ReportPlan.model_validate(raw_plan)
+            )
+        except Exception:
+            plan = ReportPlan(sections=[])
+
+        fallback_sections = [
             ReportSection(
                 title="Findings",
                 description="Synthesize all findings into one coherent, well-cited narrative.",
                 target_words=settings.report_max_words_per_section,
             )
         ]
-        plan_text = _format_plan(sections)
+        max_sections = max(1, settings.report_max_sections)
+        sections = (plan.sections or fallback_sections)[:max_sections] or fallback_sections
+
+        clamped_sections = [
+            section.model_copy(
+                update={
+                    "target_words": max(
+                        settings.report_min_words_per_section,
+                        min(section.target_words, settings.report_max_words_per_section),
+                    )
+                }
+            )
+            for section in sections
+        ]
+        plan_text = _format_plan(clamped_sections)
 
         written_parts: list[str] = []
         for section in sections:
