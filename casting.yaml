@@ -1,0 +1,14 @@
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: signoz
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+  # The MCP server is disabled by default; we enable it so Claude Code (and any other
+  # MCP client) can query traces/metrics/logs directly. Serves HTTP on :8000 — which is
+  # why the app backend was moved to :8001, see backend/README.md.
+  mcp:
+    spec:
+      enabled: true
