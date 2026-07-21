@@ -28,3 +28,23 @@ class Summary(BaseModel):
 
     summary: str = Field(description="Concise summary of the page content.")
     key_excerpts: str = Field(description="Verbatim quotes worth citing directly, if any.")
+
+
+class ReportSection(BaseModel):
+    """One planned section of the final report, drafted independently in the writer node."""
+
+    title: str = Field(description="Short section heading.")
+    description: str = Field(
+        description="What this section must cover: the sub-questions it answers and which "
+        "findings it should draw on. Written for the model drafting it, not the end reader."
+    )
+    target_words: int = Field(description="Target word count for this section's prose.")
+
+
+class ReportPlan(BaseModel):
+    """Ordered breakdown of the report into sections, produced before any prose is written."""
+
+    sections: list[ReportSection] = Field(
+        description="Ordered sections that together cover the research brief end-to-end, "
+        "with no gaps and no overlap."
+    )

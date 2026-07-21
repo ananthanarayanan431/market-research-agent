@@ -46,7 +46,8 @@ Keep concrete facts, figures, and dates; note anything worth quoting directly.
 
 {content}"""
 
-FINAL_REPORT_PROMPT = """Write the final market-research report. Today is {date}.
+REPORT_PLAN_PROMPT = """You are planning the structure of a long, in-depth market-research report.
+Today is {date}.
 
 Research brief:
 {research_brief}
@@ -54,5 +55,38 @@ Research brief:
 Findings from research sub-agents:
 {findings}
 
-Synthesize these into a well-structured report with clear sections and inline source citations.
-Do not invent facts beyond what the findings support."""
+Break the report into an ordered list of sections that together cover the brief end-to-end, with
+no gaps and no overlap between sections. For each section, give:
+- a short title
+- a description of exactly what it must cover: the sub-questions it answers and which findings
+  it should draw on
+- a target word count between {min_words} and {max_words}
+
+Plan for a genuinely long, thorough report — use {min_sections} to {max_sections} sections to
+cover the brief in depth, not a short summary. Open with an executive-summary section and close
+with a conclusion/outlook section."""
+
+REPORT_SECTION_PROMPT = """You are drafting one section of a long market-research report. Today
+is {date}.
+
+Research brief:
+{research_brief}
+
+Findings from research sub-agents:
+{findings}
+
+Full report plan, for context only (write just your assigned section, not the others):
+{plan}
+
+Report written so far:
+{written_so_far}
+
+Write the section titled "{section_title}". It must cover:
+{section_description}
+
+Target length: about {target_words} words. Requirements:
+- Output only this section's prose — no heading, one will be added automatically.
+- Do not repeat or re-summarize content already written above; continue the report naturally.
+- Back factual claims with inline citations to source URLs from the findings.
+- Do not invent facts beyond what the findings support.
+- {is_final_hint}"""

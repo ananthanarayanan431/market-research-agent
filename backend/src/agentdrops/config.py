@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 60.0
     """Timeout for every LLM call, so a stalled API request can't hang a worker forever."""
 
+    report_min_sections: int = 4
+    """Lower bound on section count the writer's plan step is asked to produce."""
+    report_max_sections: int = 8
+    """Upper bound on section count the writer's plan step is asked to produce."""
+    report_min_words_per_section: int = 200
+    """Floor a planned section's target word count is clamped to before drafting."""
+    report_max_words_per_section: int = 700
+    """Ceiling a planned section's target word count is clamped to before drafting."""
+
 
 @lru_cache
 def get_settings() -> Settings:
