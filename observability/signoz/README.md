@@ -4,7 +4,25 @@ Version-controlled SigNoz dashboard and alert definitions for the market-researc
 They read the telemetry the app emits (see `backend/src/agentdrops/observability/`), so they
 work against any SigNoz instance the app is pointed at.
 
-SigNoz itself is deployed from `casting.yaml` at the repo root (`foundryctl cast`).
+## Running SigNoz
+
+Two equivalent ways to bring the stack up:
+
+```bash
+# 1. Foundry (source of truth — regenerates everything from casting.yaml at the repo root)
+foundryctl cast -f casting.yaml
+
+# 2. Plain docker compose (committed snapshot of the Foundry-generated stack, no foundryctl needed)
+docker compose -f observability/signoz/stack/compose.yaml up -d
+```
+
+`stack/` is a committed copy of what `foundryctl cast` generates (8 services: SigNoz UI,
+OTLP ingester, ClickHouse + keeper, metastore, and the MCP server). It exposes **8080** (UI),
+**4317/4318** (OTLP gRPC/HTTP), and **8000** (MCP). `casting.yaml` + `casting.yaml.lock` remain
+the source of truth — regenerate the snapshot with `foundryctl forge` if you change them.
+
+First run only: open http://localhost:8080 and create the admin account, or the collector's OTLP
+receivers stay down until setup completes.
 
 ## Dashboard — `dashboards/agentdrops-agent.json`
 
