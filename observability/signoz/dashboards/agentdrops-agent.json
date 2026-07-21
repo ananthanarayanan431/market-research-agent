@@ -1,0 +1,373 @@
+{
+  "description": "Agent observability: search-tool latency/throughput/errors, research-turn duration, outcomes and token usage. Powered by SigNoz.",
+  "layout": [
+    {
+      "h": 6,
+      "i": "w_rate",
+      "w": 6,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 6,
+      "i": "w_p95",
+      "w": 6,
+      "x": 6,
+      "y": 0
+    },
+    {
+      "h": 6,
+      "i": "w_err",
+      "w": 6,
+      "x": 0,
+      "y": 6
+    },
+    {
+      "h": 6,
+      "i": "w_turn",
+      "w": 6,
+      "x": 6,
+      "y": 6
+    },
+    {
+      "h": 6,
+      "i": "w_out",
+      "w": 6,
+      "x": 0,
+      "y": 12
+    },
+    {
+      "h": 6,
+      "i": "w_tok",
+      "w": 6,
+      "x": 6,
+      "y": 12
+    }
+  ],
+  "tags": [
+    "agentdrops",
+    "agent",
+    "llm"
+  ],
+  "title": "Agentdrops \u2014 Market Research Agent",
+  "variables": {},
+  "version": "v5",
+  "widgets": [
+    {
+      "description": "Search-tool calls/sec per provider (rate of agentdrops.tool_call.duration.count).",
+      "fillSpans": false,
+      "id": "w_rate",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "metricName": "agentdrops.tool_call.duration.count",
+                  "reduceTo": "avg",
+                  "spaceAggregation": "sum",
+                  "temporality": null,
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "isColumn": false,
+                  "key": "tool_name",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "b41e78e0-b110-42b5-90e7-f256ed596dc4",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Tool call throughput by tool",
+      "yAxisUnit": "reqps"
+    },
+    {
+      "description": "95th-percentile search-tool latency per provider.",
+      "fillSpans": false,
+      "id": "w_p95",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "metricName": "agentdrops.tool_call.duration.bucket",
+                  "reduceTo": "avg",
+                  "spaceAggregation": "p95",
+                  "temporality": null,
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "isColumn": false,
+                  "key": "tool_name",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "d5bc35a5-f5aa-4bac-9c22-10fc8a5f3aa3",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Tool call P95 latency by tool",
+      "yAxisUnit": "s"
+    },
+    {
+      "description": "Rate of failed tool calls (success=false).",
+      "fillSpans": false,
+      "id": "w_err",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "metricName": "agentdrops.tool_call.duration.count",
+                  "reduceTo": "avg",
+                  "spaceAggregation": "sum",
+                  "temporality": null,
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "success = 'false'"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "isColumn": false,
+                  "key": "tool_name",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "31b0e61f-30e1-42a4-a6ed-e91192c240c6",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Tool call failures by tool",
+      "yAxisUnit": "reqps"
+    },
+    {
+      "description": "End-to-end latency of a full research turn (research.turn span).",
+      "fillSpans": false,
+      "id": "w_turn",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "expression": "p95(durationNano)"
+                }
+              ],
+              "dataSource": "traces",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "name = 'research.turn'"
+              },
+              "functions": [],
+              "groupBy": [],
+              "having": {
+                "expression": ""
+              },
+              "legend": "P95 turn",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "932db67e-28cd-4de0-b9f3-087f506ca9b3",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Research turn P95 duration",
+      "yAxisUnit": "ns"
+    },
+    {
+      "description": "Completed vs clarification-requested turns.",
+      "fillSpans": false,
+      "id": "w_out",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "expression": "count()"
+                }
+              ],
+              "dataSource": "traces",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "name = 'research.turn' research.outcome EXISTS"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "isColumn": false,
+                  "key": "research.outcome",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{research.outcome}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "1e065860-9e6b-4112-8679-8f6342a50e86",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Research turns by outcome",
+      "yAxisUnit": "short"
+    },
+    {
+      "description": "Mean total LLM tokens per turn (gen_ai.usage.total_tokens).",
+      "fillSpans": false,
+      "id": "w_tok",
+      "isStacked": false,
+      "nullZeroValues": "zero",
+      "opacity": "1",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "expression": "avg(gen_ai.usage.total_tokens)"
+                }
+              ],
+              "dataSource": "traces",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "name = 'research.turn'"
+              },
+              "functions": [],
+              "groupBy": [],
+              "having": {
+                "expression": ""
+              },
+              "legend": "avg tokens",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "stepInterval": 60
+            }
+          ],
+          "queryFormulas": []
+        },
+        "clickhouse_sql": [],
+        "id": "31373c55-c1ac-43dd-975c-7cbb27ec65e8",
+        "promql": [],
+        "queryType": "builder"
+      },
+      "softMax": null,
+      "softMin": null,
+      "title": "Avg tokens per research turn",
+      "yAxisUnit": "short"
+    }
+  ]
+}

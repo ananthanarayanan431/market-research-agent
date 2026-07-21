@@ -20,6 +20,14 @@ dependencies = [
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    # Auto-instrumentation: FastAPI gives request spans (and continues the frontend's trace
+    # via traceparent), httpx gives outbound spans for every search-tool call.
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
+    # Emits GenAI-semantic-convention spans for every LangChain/LangGraph chain, LLM and tool
+    # call — prompts, model name and token counts — which is what SigNoz's LLM views read.
+    "openinference-instrumentation-langchain>=0.1.29",
 ]
 
 [project.optional-dependencies]

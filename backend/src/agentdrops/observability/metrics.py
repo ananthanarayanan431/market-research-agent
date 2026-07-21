@@ -6,8 +6,10 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 
-def configure_metrics(service_name: str, otlp_endpoint: str) -> MeterProvider:
-    resource = Resource.create({SERVICE_NAME: service_name})
+def configure_metrics(
+    service_name: str, otlp_endpoint: str, resource: Resource | None = None
+) -> MeterProvider:
+    resource = resource or Resource.create({SERVICE_NAME: service_name})
     exporter = OTLPMetricExporter(endpoint=otlp_endpoint, insecure=True)
     reader = PeriodicExportingMetricReader(exporter)
     provider = MeterProvider(resource=resource, metric_readers=[reader])

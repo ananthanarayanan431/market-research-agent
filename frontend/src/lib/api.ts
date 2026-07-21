@@ -5,7 +5,8 @@ import {
   StreamEvent,
 } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+// Port 8001, not 8000: SigNoz's MCP server owns 8000. See backend/README.md.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
 
 /**
  * POST one chat turn to /chat/stream and invoke `onEvent` for each SSE event as it arrives.
