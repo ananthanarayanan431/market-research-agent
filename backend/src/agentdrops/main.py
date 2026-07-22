@@ -15,8 +15,13 @@ from starlette.exceptions import HTTPException
 from agentdrops.agents.graph import build_market_researcher
 from agentdrops.api.v1 import router as v1_router
 from agentdrops.config import get_settings
+from agentdrops.db.engine import create_engine, create_session_factory
 from agentdrops.observability.setup import configure_observability, instrument_fastapi
+from agentdrops.repository.audit import AuditLog
 from agentdrops.repository.sessions import SessionStore
+from agentdrops.service.chat_service import ChatService
+from agentdrops.service.research_service import ResearchService
+from agentdrops.service.sessions_service import SessionsService
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
 
@@ -25,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Build the shared httpx client, compiled graph, and session registry, once per process.
+    """Build the shared httpx client, DB engine, compiled graph, and session registry, once per
+    process.
 
     Telemetry is configured *before* the httpx client and the graph are built: both the httpx
     and LangChain instrumentors patch at import/class level, so anything constructed ahead of
@@ -34,10 +40,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     providers = configure_observability(settings)
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            app.state.graph = build_market_researcher(settings, client)
-            app.state.sessions = SessionStore()
-            yield
+        engine = create_engine(settings)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                session_factory = create_session_factory(engine)
+                graph = build_market_researcher(settings, client)
+                sessions = SessionStore(session_factory)
+                audit = AuditLog(session_factory)
+                app.state.engine = engine
+                app.state.chat_service = ChatService(graph, sessions, audit)
+                app.state.research_service = ResearchService(graph, sessions)
+                app.state.sessions_service = SessionsService(sessions)
+                yield
+        finally:
+            await engine.dispose()
     finally:
         providers.shutdown()
 

@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 import agentdrops.main as main_module
+from agentdrops.repository.sessions import SessionRecord, Status
 from tests.unit.agents.conftest import make_settings
 
 
@@ -69,12 +71,91 @@ class _FailingGraph:
         return _StateSnapshot({})
 
 
+class _FakeEngine:
+    """App startup needs an engine object; these route tests never touch a real database."""
+
+    async def dispose(self) -> None:
+        return None
+
+
+def _fake_create_engine(_settings: object) -> _FakeEngine:
+    return _FakeEngine()
+
+
+def _fake_create_session_factory(_engine: object) -> object:
+    return object()
+
+
+class _FakeSessionStore:
+    """In-memory stand-in for the Postgres-backed `SessionStore`, same async interface."""
+
+    def __init__(self, _session_factory: object) -> None:
+        self._sessions: dict[str, SessionRecord] = {}
+
+    async def touch(self, thread_id: str, *, title: str) -> SessionRecord:
+        return self._sessions.setdefault(
+            thread_id,
+            SessionRecord(thread_id=thread_id, title=title, created_at=datetime.now(UTC)),
+        )
+
+    async def set_status(
+        self, thread_id: str, status: Status, *, report: str | None = None
+    ) -> None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return
+        session.status = status
+        if report is not None:
+            session.report = report
+
+    async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
+        session = self._sessions.get(thread_id)
+        if session is not None:
+            session.sources.append({"topic": topic, "summary": summary})
+
+    async def get(self, thread_id: str) -> SessionRecord | None:
+        return self._sessions.get(thread_id)
+
+    async def list_recent(self) -> list[SessionRecord]:
+        return sorted(self._sessions.values(), key=lambda s: s.created_at, reverse=True)
+
+
+class _FakeAuditLog:
+    def __init__(self, _session_factory: object) -> None:
+        self.records: list[dict[str, object]] = []
+
+    async def record(
+        self,
+        thread_id: str,
+        *,
+        operation: str,
+        status: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        self.records.append(
+            {
+                "thread_id": thread_id,
+                "operation": operation,
+                "status": status,
+                "detail": detail or {},
+            }
+        )
+
+
+def _patch_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_module, "create_engine", _fake_create_engine)
+    monkeypatch.setattr(main_module, "create_session_factory", _fake_create_session_factory)
+    monkeypatch.setattr(main_module, "SessionStore", _FakeSessionStore)
+    monkeypatch.setattr(main_module, "AuditLog", _FakeAuditLog)
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(
         main_module, "build_market_researcher", lambda settings, client: _FakeGraph()
     )
+    _patch_db(monkeypatch)
     with TestClient(main_module.app) as test_client:
         yield test_client
 
@@ -85,6 +166,7 @@ def failing_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(
         main_module, "build_market_researcher", lambda settings, client: _FailingGraph()
     )
+    _patch_db(monkeypatch)
     with TestClient(main_module.app) as test_client:
         yield test_client
 

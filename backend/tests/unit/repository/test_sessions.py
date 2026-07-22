@@ -1,13 +1,15 @@
 """Integration tests for `SessionStore` against a real Postgres — see conftest.py for the
-auto-skip-if-unreachable `pool` fixture."""
+auto-skip-if-unreachable `session_factory` fixture."""
 
-import asyncpg
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentdrops.repository.sessions import SessionStore
 
 
-async def test_touch_creates_a_session_once(pool: asyncpg.Pool) -> None:
-    store = SessionStore(pool)
+async def test_touch_creates_a_session_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
     first = await store.touch("t1", title="EV charging in the EU")
     second = await store.touch("t1", title="ignored on the second call")
 
@@ -17,8 +19,10 @@ async def test_touch_creates_a_session_once(pool: asyncpg.Pool) -> None:
     assert first.status == "clarifying"
 
 
-async def test_set_status_updates_status_and_optional_report(pool: asyncpg.Pool) -> None:
-    store = SessionStore(pool)
+async def test_set_status_updates_status_and_optional_report(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
     await store.touch("t2", title="EV charging in the EU")
 
     await store.set_status("t2", "running")
@@ -34,8 +38,10 @@ async def test_set_status_updates_status_and_optional_report(pool: asyncpg.Pool)
     assert done.report == "# Report"
 
 
-async def test_add_source_appends_to_sources(pool: asyncpg.Pool) -> None:
-    store = SessionStore(pool)
+async def test_add_source_appends_to_sources(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
     await store.touch("t3", title="EV charging in the EU")
 
     await store.add_source("t3", "EU", "EU findings")
@@ -49,12 +55,16 @@ async def test_add_source_appends_to_sources(pool: asyncpg.Pool) -> None:
     ]
 
 
-async def test_get_returns_none_for_unknown_thread(pool: asyncpg.Pool) -> None:
-    assert await SessionStore(pool).get("does-not-exist") is None
+async def test_get_returns_none_for_unknown_thread(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    assert await SessionStore(session_factory).get("does-not-exist") is None
 
 
-async def test_list_recent_orders_most_recent_first(pool: asyncpg.Pool) -> None:
-    store = SessionStore(pool)
+async def test_list_recent_orders_most_recent_first(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
     await store.touch("older", title="First")
     await store.touch("newer", title="Second")
 
