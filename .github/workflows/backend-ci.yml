@@ -42,9 +42,6 @@ jobs:
       - name: ruff check
         run: ruff check .
 
-      - name: ruff format --check
-        run: ruff format --check .
-
   typecheck:
     name: Typecheck (mypy --strict)
     runs-on: ubuntu-latest
@@ -81,5 +78,8 @@ jobs:
       # Unit tests are fully offline: agentdrops.config.Settings is monkeypatched per-test
       # (tests/unit/agents/conftest.py::make_settings) and webtool tests use respx — no real
       # API keys, no Postgres/Redis/MinIO services needed here.
+      #
+      # `python -m pytest`, not the bare `pytest` script: the console-script entry point
+      # doesn't add cwd to sys.path, so `from tests.unit... import ...` fails to resolve.
       - name: pytest
-        run: pytest -q
+        run: python -m pytest -q

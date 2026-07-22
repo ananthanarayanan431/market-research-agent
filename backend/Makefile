@@ -6,7 +6,9 @@ VENV        ?= .venv
 PYTHON      := $(VENV)/bin/python
 PIP         := $(VENV)/bin/pip
 UVICORN     := $(VENV)/bin/uvicorn
-PYTEST      := $(VENV)/bin/pytest
+# `python -m pytest`, not the `pytest` console script directly: the script entry point doesn't
+# add cwd to sys.path, so `from tests.unit... import ...` fails to resolve the `tests` package.
+PYTEST      := $(PYTHON) -m pytest
 RUFF        := $(VENV)/bin/ruff
 MYPY        := $(VENV)/bin/mypy
 

@@ -6,16 +6,17 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 
 from agentdrops.agents.graph import build_market_researcher
-from agentdrops.api.sessions import SessionStore
 from agentdrops.api.v1 import router as v1_router
 from agentdrops.config import get_settings
 from agentdrops.observability.setup import configure_observability, instrument_fastapi
+from agentdrops.repository.sessions import SessionStore
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
 

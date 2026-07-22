@@ -10,10 +10,10 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
-from agentdrops.api.sessions import SessionStore
 from agentdrops.api.v1.schema import ChatRequest, ChatResponse
 from agentdrops.observability.logging import bind_run_id
 from agentdrops.observability.tracing import traced_span
+from agentdrops.repository.sessions import SessionStore
 from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
 from agentdrops.types.response import ErrorResponse, SuccessResponse
 

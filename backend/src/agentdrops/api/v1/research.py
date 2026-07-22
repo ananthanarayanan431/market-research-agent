@@ -1,39 +1,15 @@
-"""Research endpoints: session listing, status, and completed reports."""
+"""Research endpoints: thread status and completed reports (see `sessions.py` for listing)."""
 
 from typing import Any
 
 from fastapi import APIRouter, Request, status
 
-from agentdrops.api.sessions import SessionStore
-from agentdrops.api.v1.schema import (
-    ReportResponse,
-    ResearchStatusResponse,
-    SessionsResponse,
-    SessionSummary,
-)
+from agentdrops.api.v1.schema import ReportResponse, ResearchStatusResponse
+from agentdrops.repository.sessions import SessionStore
 from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
 from agentdrops.types.response import ErrorResponse, SuccessResponse
 
 router = APIRouter(prefix="/research", tags=["research"])
-
-
-@router.get("/sessions", response_model=SuccessResponse[SessionsResponse])
-async def list_sessions(request: Request) -> SuccessResponse[SessionsResponse]:
-    """List every known research thread, most recently started first, for the sidebar."""
-    sessions: SessionStore = request.app.state.sessions
-    return SuccessResponse(
-        data=SessionsResponse(
-            sessions=[
-                SessionSummary(
-                    id=s.thread_id,
-                    title=s.title,
-                    created_at=s.created_at.isoformat(),
-                    status=s.status,
-                )
-                for s in sessions.list_recent()
-            ]
-        )
-    )
 
 
 @router.get(
