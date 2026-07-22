@@ -16,6 +16,7 @@ dependencies = [
     "langchain-openai>=0.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "asyncpg>=0.29",
     "openai>=1.50",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
@@ -35,8 +36,12 @@ providers = [
     "langchain-anthropic>=0.2",
     "langchain-google-genai>=2.0",
 ]
+db = [
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
+]
 dev = [
-    "agentdrops[providers]",
+    "agentdrops[providers,db]",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
@@ -76,6 +81,10 @@ module = [
     "langchain_google_genai.*",
     "langgraph.*",
 ]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "alembic.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
