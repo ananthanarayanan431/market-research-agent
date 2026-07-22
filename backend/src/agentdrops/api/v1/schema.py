@@ -1,4 +1,4 @@
-"""Request/response contracts for the chat and research HTTP endpoints."""
+"""Request/response contracts for the v1 chat and research HTTP endpoints."""
 
 from typing import Literal
 

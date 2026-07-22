@@ -42,3 +42,16 @@ export type ReportResponse = {
   report: string;
   sources: ResearchSource[];
 };
+
+/** The `{code, description, message}` body every non-2xx REST response returns as `data`. */
+export type ApiError = {
+  code: number;
+  description: string;
+  message: string | null;
+};
+
+/** The `{success, data}` envelope every plain-JSON REST endpoint wraps its body in. SSE events
+ * on /chat/stream are a separate protocol (see StreamEvent) and are not wrapped this way. */
+export type ApiEnvelope<T> =
+  | { success: true; data: T }
+  | { success: false; data: ApiError };

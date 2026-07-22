@@ -35,10 +35,19 @@ docker compose up -d
 Starts postgres (5432), redis (6379), minio (9000, console 9001) with creds matching
 `.env.example` defaults.
 
+## Migrations
+
+```bash
+alembic upgrade head
+```
+
+Creates the `sessions` and `audit_log` tables (see `src/agentdrops/db/migrations/`). Run once
+after `docker compose up -d`, before starting the API — required in dev and in any deploy.
+
 ## Run
 
 ```bash
-uvicorn agentdrops.api.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8000
 ```
 
 - `GET /health` — liveness probe.

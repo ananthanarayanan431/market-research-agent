@@ -57,4 +57,4 @@ Changing any of these in the backend means updating the panels/alerts here too:
 - Metric `agentdrops.tool_call.duration` (histogram) with labels `tool_name`, `success` —
   emitted by `record_tool_call` from the search pipeline.
 - Span `research.turn` with attributes `research.outcome`, `gen_ai.usage.total_tokens` —
-  emitted per turn in `api/main.py`.
+  emitted per turn in `api/v1/chat.py`.

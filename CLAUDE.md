@@ -20,7 +20,7 @@ pip install -e ".[dev]"           # includes native provider SDKs (anthropic, go
 cp .env.example .env              # required keys; Settings fails fast if any are missing
 
 docker compose up -d              # postgres 5432, redis 6379, minio 9000/9001 (creds match .env.example)
-uvicorn agentdrops.api.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8000
 
 pytest                            # asyncio_mode=auto, pythonpath=src — no manual PYTHONPATH
 pytest tests/unit/agents/supervisor/test_graph.py::test_name   # single test
@@ -54,15 +54,15 @@ Each level has its own TypedDict state in `agents/state.py`; the reducers (`add_
 Key invariants to preserve when editing:
 
 - **Every node builds its LLM through `agents/llm.py::build_llm`** and invokes it through `ainvoke_with_retry`. Provider selection is `settings.llm_provider` dispatched by `init_chat_model` — swapping OpenAI-wire gateways (OpenRouter/Together/Groq/vLLM) for native Anthropic/Gemini is a `.env` change, never a code change. Don't import provider SDKs anywhere; `resilience/llm_retry.py` deliberately duck-types on `status_code` / class-name suffixes to stay provider-agnostic.
-- **The `supervisor` node streams its subgraph with `astream`, not `ainvoke`.** A bare nested `ainvoke` starts an isolated run whose `custom` stream writes (progress/source events) never reach the `/chat/stream` consumer. Same reason `run_topic` uses `get_stream_writer()`.
+- **The `supervisor` node streams its subgraph with `astream`, not `ainvoke`.** A bare nested `ainvoke` starts an isolated run whose `custom` stream writes (progress/source events) never reach the `/v1/chat/stream` consumer. Same reason `run_topic` uses `get_stream_writer()`.
 - **`ResearchComplete` does not exit the supervisor loop directly.** Every tool call in a turn must get a matching `ToolMessage` or the LLM API rejects the history; the loop ends on the next turn when the model emits no tool calls.
 - Three independent caps in `Settings` bound cost: `max_researcher_iterations` (supervisor turns), `max_concurrent_researchers` (asyncio.Semaphore fan-out), `max_tool_call_iterations` (sub-agent ReAct rounds).
 
 **Search tools** (`webtools/`) subclass `BaseSearchTool` and return `SearchResult`; each applies `HTTP_RETRY` + a named circuit breaker and normalizes failures to `SearchToolError` via `wrap_http_errors`. They are adapted into LangChain tools in `agents/tools.py`, which delegates all search→dedupe→summarize→format work to `agents/research/methods.py::run_search_pipeline`. Adding exa/news/reddit to the agent means appending to the `tools` list in `build_market_researcher` — nothing else changes. `webtools/registry.py::build_search_tools` constructs all four but is not yet wired into the graph.
 
-**API** (`api/main.py`): `_run_graph_turn` is the single caller of `graph.astream`; `/chat` (terminal event only) and `/chat/stream` (SSE, all events) both go through it so session side effects can't diverge. SSE event shapes are documented on `chat_stream` and mirrored in `frontend/src/lib/types.ts` — change both together.
+**API** (`main.py` + `api/v1/` + `service/`): `main.py` (package root, not under `api/`) owns app-wide concerns only — lifespan, CORS, exception handlers, `/health` — and mounts the versioned routers from `api/v1/`. Each `api/v1/` module is one route group and is *just* a router: `chat.py` (`/v1/chat`, `/v1/chat/stream`), `sessions.py` (`/v1/research/sessions`, the sidebar listing), and `research.py` (`/v1/research/{thread_id}`, `/v1/research/{thread_id}/report`), sharing request/response models from `api/v1/schema.py`. `sessions_router` is mounted before `research_router` in `api/v1/__init__.py` — both share the `/research` prefix, and the static `/research/sessions` route must match before `research.py`'s dynamic `/research/{thread_id}`. All business logic lives in `service/` (`ChatService`, `ResearchService`, `SessionsService`), one class per route group, constructed once in `main.py`'s lifespan with their `repository/`/graph dependencies injected and attached to `app.state`; routers only extract request data, call a service method, and map the result onto an HTTP response. `ChatService.run_turn` is the single caller of `graph.astream`; `/v1/chat` (terminal event only) and `/v1/chat/stream` (SSE, all events) both go through it so session and audit side effects can't diverge. SSE event shapes are documented on `chat_stream` and mirrored in `frontend/src/lib/types.ts` — change both together. A future breaking change gets its own `api/v2/` package mounted alongside `v1`, not a rewrite of `v1` in place.
 
-**Persistence is process-local**: `InMemorySaver` checkpointer + in-memory `SessionStore` (`api/sessions.py`). Both die on restart; replace them together if runs need to survive one. `/research/{id}` reads status off the graph checkpoint, but `failed` only exists in the session store.
+**Persistence is process-local**: `InMemorySaver` checkpointer + in-memory `SessionStore` (`repository/sessions.py` — a data-access layer separate from `api/`, shared across API versions). Both die on restart; replace them together if runs need to survive one. `/v1/research/{id}` reads status off the graph checkpoint, but `failed` only exists in the session store.
 
 **Prompts** all live in `agents/prompts.py`; structured-output schemas in `agents/schemas.py`.
 
@@ -74,4 +74,4 @@ Tests mirror the source tree under `backend/tests/unit/`. No network: `tests/uni
 
 `frontend/AGENTS.md` (loaded via `frontend/CLAUDE.md`): this is Next.js 16, which has breaking changes vs. older training data — read the relevant guide in `node_modules/next/dist/docs/` before writing Next-specific code.
 
-All state lives in `src/app/page.tsx` (single client component); `Sidebar`/`ChatPanel`/`ResearchDrawer` are presentational. Two concurrency guards there are load-bearing: `selectionTokenRef` (stale session fetches must not clobber a newer selection) and `pollTimeoutRef` (the 3s status poll for reopened running sessions). `src/lib/api.ts` owns all backend calls, including the hand-rolled SSE parser for `/chat/stream`.
+All state lives in `src/app/page.tsx` (single client component); `Sidebar`/`ChatPanel`/`ResearchDrawer` are presentational. Two concurrency guards there are load-bearing: `selectionTokenRef` (stale session fetches must not clobber a newer selection) and `pollTimeoutRef` (the 3s status poll for reopened running sessions). `src/lib/api.ts` owns all backend calls, including the hand-rolled SSE parser for `/v1/chat/stream`.
