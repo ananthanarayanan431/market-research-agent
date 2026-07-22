@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import agentdrops.main as main_module
 from tests.unit.agents.conftest import make_settings
 from tests.unit.api.v1.conftest import (
+    _fake_checkpointer,
     _fake_create_engine,
     _fake_create_session_factory,
     _FakeAuditLog,
@@ -31,12 +32,15 @@ class _StubGraph:
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(
-        main_module, "build_market_researcher", lambda settings, client: _StubGraph()
+        main_module,
+        "build_market_researcher",
+        lambda settings, client, checkpointer: _StubGraph(),
     )
     monkeypatch.setattr(main_module, "create_engine", _fake_create_engine)
     monkeypatch.setattr(main_module, "create_session_factory", _fake_create_session_factory)
     monkeypatch.setattr(main_module, "SessionStore", _FakeSessionStore)
     monkeypatch.setattr(main_module, "AuditLog", _FakeAuditLog)
+    monkeypatch.setattr(main_module, "checkpointer", _fake_checkpointer)
     with TestClient(main_module.app) as test_client:
         yield test_client
 

@@ -3,7 +3,7 @@
 from typing import Any, cast
 
 import httpx
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -20,7 +20,7 @@ from agentdrops.webtools.tavily import TavilySearchTool
 
 
 def build_market_researcher(
-    settings: Settings, client: httpx.AsyncClient
+    settings: Settings, client: httpx.AsyncClient, checkpointer: BaseCheckpointSaver[Any]
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """Compile the full market-research pipeline, with Tavily wired in as the only search tool.
 
@@ -77,4 +77,4 @@ def build_market_researcher(
     graph.add_edge("supervisor", "final_report_generation")
     graph.add_edge("final_report_generation", END)
 
-    return graph.compile(checkpointer=InMemorySaver())
+    return graph.compile(checkpointer=checkpointer)

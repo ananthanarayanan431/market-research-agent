@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from agentdrops.agents.checkpointer import checkpointer
 from agentdrops.agents.graph import build_market_researcher
 from agentdrops.api.v1 import router as v1_router
 from agentdrops.config import get_settings
@@ -42,12 +43,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         engine = create_engine(settings)
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with (
+                httpx.AsyncClient(timeout=30.0) as client,
+                checkpointer(settings) as saver,
+            ):
                 session_factory = create_session_factory(engine)
-                graph = build_market_researcher(settings, client)
+                graph = build_market_researcher(settings, client, saver)
                 sessions = SessionStore(session_factory)
                 audit = AuditLog(session_factory)
                 app.state.engine = engine
+                app.state.sessions = sessions
                 app.state.audit = audit
                 app.state.chat_service = ChatService(graph, sessions, audit)
                 app.state.research_service = ResearchService(graph, sessions)

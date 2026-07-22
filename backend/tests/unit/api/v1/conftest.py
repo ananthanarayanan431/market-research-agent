@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -76,6 +77,15 @@ class _FakeEngine:
 
     async def dispose(self) -> None:
         return None
+
+
+class _FakeCheckpointer:
+    pass
+
+
+@asynccontextmanager
+async def _fake_checkpointer(_settings: object) -> AsyncIterator[_FakeCheckpointer]:
+    yield _FakeCheckpointer()
 
 
 def _fake_create_engine(_settings: object) -> _FakeEngine:
@@ -157,13 +167,16 @@ def _patch_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "create_session_factory", _fake_create_session_factory)
     monkeypatch.setattr(main_module, "SessionStore", _FakeSessionStore)
     monkeypatch.setattr(main_module, "AuditLog", _FakeAuditLog)
+    monkeypatch.setattr(main_module, "checkpointer", _fake_checkpointer)
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(
-        main_module, "build_market_researcher", lambda settings, client: _FakeGraph()
+        main_module,
+        "build_market_researcher",
+        lambda settings, client, checkpointer: _FakeGraph(),
     )
     _patch_db(monkeypatch)
     with TestClient(main_module.app) as test_client:
@@ -174,7 +187,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 def failing_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(
-        main_module, "build_market_researcher", lambda settings, client: _FailingGraph()
+        main_module,
+        "build_market_researcher",
+        lambda settings, client, checkpointer: _FailingGraph(),
     )
     _patch_db(monkeypatch)
     with TestClient(main_module.app) as test_client:
