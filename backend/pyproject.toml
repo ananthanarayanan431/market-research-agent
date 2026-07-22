@@ -18,6 +18,10 @@ dependencies = [
     "uvicorn>=0.30",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
+    "celery>=5.4",
+    "redis>=5.0",
+    "langgraph-checkpoint-postgres>=3.0",
+    "psycopg[binary,pool]>=3.1",
     "openai>=1.50",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
@@ -46,6 +50,7 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
+    "fakeredis>=2.20",
     "ruff>=0.5",
     "mypy>=1.10",
 ]
@@ -85,7 +90,7 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["asyncpg.*", "alembic.*"]
+module = ["asyncpg.*", "alembic.*", "celery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
