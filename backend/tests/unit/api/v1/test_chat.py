@@ -56,6 +56,13 @@ def test_chat_stream_first_turn_emits_clarify_event(client: TestClient) -> None:
         }
     ]
 
+    audit = client.app.state.audit.records
+    assert len(audit) == 1
+    assert audit[0]["thread_id"] == events[0]["thread_id"]
+    assert audit[0]["operation"] == "chat_stream"
+    assert audit[0]["status"] == "clarify"
+    assert audit[0]["detail"] == {}
+
 
 def test_chat_stream_second_turn_emits_progress_source_and_done(client: TestClient) -> None:
     first = client.post("/v1/chat/stream", json={"message": "Research the EV charging market"})
