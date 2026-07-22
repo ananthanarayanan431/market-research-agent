@@ -8,7 +8,9 @@ Create Date: 2026-07-22
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "0001"
 down_revision: str | None = None
@@ -17,34 +19,47 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE TABLE sessions (
-            thread_id   TEXT PRIMARY KEY,
-            title       TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'clarifying',
-            report      TEXT,
-            sources     JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
+    op.create_table(
+        "sessions",
+        sa.Column("thread_id", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'clarifying'")),
+        sa.Column("report", sa.Text(), nullable=True),
+        sa.Column("sources", JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("thread_id"),
     )
-    op.execute(
-        """
-        CREATE TABLE audit_log (
-            id          BIGSERIAL PRIMARY KEY,
-            thread_id   TEXT NOT NULL REFERENCES sessions(thread_id) ON DELETE CASCADE,
-            operation   TEXT NOT NULL,
-            status      TEXT NOT NULL,
-            detail      JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
+    op.create_table(
+        "audit_log",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("thread_id", sa.Text(), nullable=False),
+        sa.Column("operation", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("detail", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["thread_id"], ["sessions.thread_id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
     )
-    op.execute("CREATE INDEX ix_audit_log_thread_id ON audit_log (thread_id)")
+    op.create_index("ix_audit_log_thread_id", "audit_log", ["thread_id"], unique=False)
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE audit_log")
-    op.execute("DROP TABLE sessions")
+    op.drop_index("ix_audit_log_thread_id", table_name="audit_log")
+    op.drop_table("audit_log")
+    op.drop_table("sessions")
