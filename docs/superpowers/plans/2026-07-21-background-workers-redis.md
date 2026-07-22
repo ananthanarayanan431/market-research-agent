@@ -2,20 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move LangGraph execution out of the FastAPI request/response cycle and into Celery worker processes, with Redis as the shared job-status/pub-sub layer and Postgres as the LangGraph checkpointer, per `docs/superpowers/specs/2026-07-21-background-workers-redis-design.md`.
+**Goal:** Move LangGraph execution out of the FastAPI request/response cycle and into Celery worker processes, per `docs/superpowers/specs/2026-07-21-background-workers-redis-design.md` — reconciled against the Postgres-backed `SessionStore`/`AuditLog`/`ChatService` layer that landed after that spec was written (commits `fce3b75..bc05961`).
 
-**Architecture:** FastAPI becomes thin — `/chat` and `/chat/stream` write a `queued` job record to Redis and enqueue a Celery task, never calling `graph.astream` themselves. A separate Celery worker process (started via `make worker`) builds the graph fresh per task, drives it with a Postgres-backed checkpointer, and publishes every event to a Redis pub/sub channel while updating a Redis job record that the API reads back for status/history. `/chat/stream` relays that pub/sub channel as SSE, so the wire format the frontend already parses is unchanged.
+**Architecture:** `api/v1/chat.py`'s routes touch the session (Postgres, via the existing `SessionStore`) and enqueue a Celery task, then return/stream immediately — they no longer call `ChatService.run_turn` themselves. A Celery worker builds its own `ChatService` (same class the routes used to call directly) per task, using a Postgres-backed LangGraph checkpointer instead of `InMemorySaver`, and relays every event `run_turn` yields onto a Redis pub/sub channel. `/chat/stream` subscribes to that channel and forwards it as SSE — same wire format the frontend already parses. Session status/report/sources/audit trail continue to live in Postgres (already real, tested infrastructure); Redis's role is narrowed to the Celery broker/backend and the pub/sub relay — there is no separate Redis job-status store.
 
 **Tech Stack:** Celery 5.x (broker+backend=Redis), `redis` (async client), `langgraph-checkpoint-postgres` + `psycopg[binary,pool]`, `fakeredis` (dev/test only).
 
 ## Global Constraints
 
-- No network in unit tests: Celery/Redis/Postgres interactions are tested against `fakeredis.aioredis.FakeRedis` or in-process fakes, never a real broker/DB (per `backend/tests/unit/agents/conftest.py`'s existing "no network" convention).
+- No network in unit tests: Celery/Redis interactions are tested against `fakeredis.aioredis.FakeRedis` or in-process fakes; Postgres-touching code (migrations, `SessionStore`) follows the existing convention in `backend/tests/unit/repository/` — real Postgres via `docker compose up -d`, auto-skipped (`pytest.skip`) if unreachable.
 - `pytest` config is `asyncio_mode = "auto"`, `pythonpath = ["src"]` — `async def test_*` functions need no `@pytest.mark.asyncio` decorator, but a test that must call `asyncio.run()` itself (bridging into Celery's sync task body) MUST be a plain `def test_*`, not `async def`, or it will hit `RuntimeError: asyncio.run() cannot be called from a running event loop`.
 - `mypy src` runs in strict mode — every new function needs full type annotations.
-- `ruff check .` lint rules: `E, F, I, UP, B, SIM, ASYNC` — imports sorted, no unused imports, async-specific checks (e.g. no blocking calls disguised as async).
-- Existing conventions to follow, not restructure: src-layout under `backend/src/agentdrops/`, `tests/unit/` mirrors `src/`, one `Makefile` target per process today (`make run` for the API) — this plan adds `make worker` alongside it rather than introducing Docker/compose app services that don't exist in this repo today.
-- `redis_url`/`database_url` are already required `Settings` fields (`backend/src/agentdrops/config.py:43-44`) — no new required settings are introduced.
+- `ruff check .` lint rules: `E, F, I, UP, B, SIM, ASYNC` — imports sorted, no unused imports.
+- **Do not change `DATABASE_URL`'s format.** `db/engine.py:20-21` passes `settings.database_url` straight to SQLAlchemy's `create_async_engine`, which requires the `postgresql+asyncpg://` dialect prefix already in `.env.example`/`tests/unit/agents/conftest.py`. `langgraph-checkpoint-postgres`'s `AsyncPostgresSaver` needs the plain `postgresql://` form instead — strip the prefix locally, in the new checkpointer-construction code (Task 3), never in `Settings`/`.env.example`.
+- Follow the existing layering: routes (`api/v1/`) call services (`service/`), services call repositories (`repository/`), repositories call the DB via `db/engine.py`'s session factory. The worker is a new caller of the same `service`/`repository` layer, not a parallel implementation of it.
+- `psycopg2-binary` (already a dev dependency, for Alembic's sync migration runner) is a different package from `psycopg` (v3, needed by `langgraph-checkpoint-postgres`) — both are needed, they don't conflict.
 
 ---
 
@@ -23,32 +24,27 @@
 
 **Files:**
 - Modify: `backend/pyproject.toml`
-- Modify: `backend/.env.example`
-- Modify: `backend/tests/unit/agents/conftest.py:14` (fix `database_url` format)
 
 **Interfaces:**
-- Produces: `celery`, `redis` (async client at `redis.asyncio.Redis`), `langgraph-checkpoint-postgres` (`langgraph.checkpoint.postgres.aio.AsyncPostgresSaver`), `psycopg[binary,pool]` as runtime deps; `fakeredis` as a dev/test dep — all subsequent tasks import these.
+- Produces: `celery`, `redis` (async client at `redis.asyncio.Redis`), `langgraph-checkpoint-postgres` (`langgraph.checkpoint.postgres.aio.AsyncPostgresSaver`), `psycopg[binary,pool]` as runtime deps; `fakeredis` as a dev/test dep.
 
-`langgraph-checkpoint-postgres`'s `AsyncPostgresSaver` uses `psycopg` (v3) connection strings (`postgresql://user:pass@host:port/db`), **not** SQLAlchemy's `postgresql+asyncpg://` dialect form. `database_url` is declared in `Settings` today but unused anywhere in `src/` — this task is what starts using it, so this is the point to fix its format before anything depends on the wrong one.
+- [ ] **Step 1: Add the new dependencies**
 
-- [ ] **Step 1: Add the new dependencies to `pyproject.toml`**
-
-Edit `backend/pyproject.toml`'s `dependencies` list (after the `openinference-instrumentation-langchain` line):
+In `backend/pyproject.toml`, add to `dependencies` (after `"sqlalchemy[asyncio]>=2.0",`):
 
 ```toml
-    "openinference-instrumentation-langchain>=0.1.29",
+    "sqlalchemy[asyncio]>=2.0",
     "celery>=5.4",
     "redis>=5.0",
     "langgraph-checkpoint-postgres>=3.0",
     "psycopg[binary,pool]>=3.1",
-]
 ```
 
-And add `fakeredis` to the `dev` extra:
+Add `fakeredis` to `dev`:
 
 ```toml
 dev = [
-    "agentdrops[providers]",
+    "agentdrops[providers,db]",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
@@ -58,18 +54,13 @@ dev = [
 ]
 ```
 
-Celery ships incomplete/no inline type stubs, so `mypy src --strict` will fail on `import celery` once Task 5 adds real code importing it, unless it's added to the existing `ignore_missing_imports` override list. Add it now while `pyproject.toml` is already open — in `[[tool.mypy.overrides]]`, change:
+- [ ] **Step 2: Add the mypy override for `celery`**
+
+Change:
 
 ```toml
 [[tool.mypy.overrides]]
-module = [
-    "langchain.*",
-    "langchain_core.*",
-    "langchain_openai.*",
-    "langchain_anthropic.*",
-    "langchain_google_genai.*",
-    "langgraph.*",
-]
+module = ["asyncpg.*", "alembic.*"]
 ignore_missing_imports = true
 ```
 
@@ -77,88 +68,460 @@ to:
 
 ```toml
 [[tool.mypy.overrides]]
-module = [
-    "langchain.*",
-    "langchain_core.*",
-    "langchain_openai.*",
-    "langchain_anthropic.*",
-    "langchain_google_genai.*",
-    "langgraph.*",
-    "celery.*",
-]
+module = ["asyncpg.*", "alembic.*", "celery.*"]
 ignore_missing_imports = true
 ```
 
-(`langgraph-checkpoint-postgres` is imported as `langgraph.checkpoint.postgres.*`, already covered by the existing `langgraph.*` glob; `redis` ships its own inline types (`py.typed`) since v4.2, so it needs no override.)
+(`langgraph-checkpoint-postgres` is imported as `langgraph.checkpoint.postgres.*`, already covered by the existing `langgraph.*` override; `redis` ships its own inline types since v4.2, so it needs none.)
 
-- [ ] **Step 2: Fix `DATABASE_URL`'s format in `.env.example`**
-
-In `backend/.env.example`, change:
-
-```
-DATABASE_URL=postgresql+asyncpg://agentdrops:agentdrops@localhost:5432/agentdrops
-```
-
-to:
-
-```
-# Plain psycopg conninfo (no +asyncpg dialect suffix) — langgraph-checkpoint-postgres uses
-# psycopg directly, not SQLAlchemy.
-DATABASE_URL=postgresql://agentdrops:agentdrops@localhost:5432/agentdrops
-```
-
-- [ ] **Step 3: Fix the matching test fixture default**
-
-In `backend/tests/unit/agents/conftest.py:14`, change:
-
-```python
-        "database_url": "postgresql+asyncpg://u:p@localhost:5432/agentdrops",
-```
-
-to:
-
-```python
-        "database_url": "postgresql://u:p@localhost:5432/agentdrops",
-```
-
-- [ ] **Step 4: Install and verify the imports**
+- [ ] **Step 3: Install and verify**
 
 Run: `cd backend && source .venv/bin/activate && pip install -e ".[dev]"`
-Expected: installs successfully, no dependency conflicts.
+Expected: installs successfully.
 
-Run:
-```bash
-python -c "import celery, redis, fakeredis; from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print('ok')"
-```
+Run: `python -c "import celery, redis, fakeredis; from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print('ok')"`
 Expected: prints `ok`.
 
-- [ ] **Step 5: Run the existing suite to confirm nothing broke**
-
 Run: `pytest`
-Expected: PASS (same pass count as before this task — this step only touches config/deps).
+Expected: PASS (same pass/skip count as before this task).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add backend/pyproject.toml backend/.env.example backend/tests/unit/agents/conftest.py
+git add backend/pyproject.toml
 git commit -m "chore(backend): add celery/redis/postgres-checkpoint deps for background workers"
 ```
 
 ---
 
-### Task 2: Make the LangGraph checkpointer injectable
+### Task 2: Add `queued` status and `clarify_question`/`error` fields to sessions
 
 **Files:**
-- Modify: `backend/src/agentdrops/agents/graph.py`
-- Test: `backend/tests/unit/agents/test_graph.py` (new file)
+- Create: `backend/src/agentdrops/db/migrations/versions/0002_add_queued_status_and_session_detail_fields.py`
+- Modify: `backend/src/agentdrops/db/models/sessions.py`
+- Modify: `backend/src/agentdrops/repository/sessions.py`
+- Modify: `backend/src/agentdrops/service/chat_service.py`
+- Modify: `backend/src/agentdrops/service/research_service.py`
+- Modify: `backend/src/agentdrops/api/v1/schema.py`
+- Modify: `backend/tests/unit/repository/test_sessions.py`
+- Modify: `backend/tests/unit/api/v1/conftest.py`
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `build_market_researcher(settings: Settings, client: httpx.AsyncClient, checkpointer: BaseCheckpointSaver[Any]) -> CompiledStateGraph[Any, Any, Any, Any]` — the `checkpointer` param is new; every caller (Task 7's worker bootstrap, this task's test) must now pass one explicitly. `InMemorySaver` is no longer constructed inside this function.
+- Produces: `Status = Literal["queued", "clarifying", "running", "done", "failed"]` (was 4 values, now 5, default `"queued"`); `SessionRecord` gains `clarify_question: str | None = None` and `error: str | None = None`; `SessionStore.set_status(thread_id, status, *, report=None, clarify_question=None, error=None) -> None`; `ResearchService.get_status` returns `"queued"` directly from the session (like it already does for `"failed"`) instead of falling through to an empty checkpoint read and 404ing.
 
-Today `build_market_researcher` hardcodes `graph.compile(checkpointer=InMemorySaver())` (`graph.py:80`), which is exactly what makes graph state process-bound. The worker (Task 7) needs to pass a Postgres-backed checkpointer instead; tests need to keep passing a plain `InMemorySaver()` so they don't need a real Postgres connection.
+Two real gaps exist today that the async model would otherwise expose:
+1. There's no "queued" status — a fresh `touch()` defaults to `"clarifying"` (`db/models/sessions.py:17-19`), which is misleading before any graph node has run, and becomes actively wrong once enqueueing and execution are two different processes with a real gap between them.
+2. Nothing durable records *what* a clarify question asked or *why* a turn failed — only the audit log's `detail` JSONB has the error text (`chat_service.py:102-104`), and nothing has the clarify question text at all. `/chat/stream`'s race-condition reconstruction (Task 8) needs both to rebuild a terminal SSE event after the fact.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing repository test**
+
+Add to `backend/tests/unit/repository/test_sessions.py` (these are the existing Postgres-integration tests — auto-skipped if Postgres isn't reachable, per `conftest.py`'s `session_factory` fixture):
+
+```python
+async def test_touch_defaults_to_queued(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    session = await store.touch("t-queued", title="EV charging in the EU")
+
+    assert session.status == "queued"
+
+
+async def test_set_status_stores_clarify_question_and_error(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t4", title="EV charging in the EU")
+
+    await store.set_status("t4", "clarifying", clarify_question="Which region?")
+    clarifying = await store.get("t4")
+    assert clarifying is not None
+    assert clarifying.clarify_question == "Which region?"
+
+    await store.set_status("t4", "failed", error="LLM provider unavailable")
+    failed = await store.get("t4")
+    assert failed is not None
+    assert failed.error == "LLM provider unavailable"
+```
+
+Update the existing `test_touch_creates_a_session_once` test — it currently asserts `first.status == "clarifying"` (line 19); change that assertion to `first.status == "queued"`.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/repository/test_sessions.py -v`
+Expected (if Postgres is reachable via `docker compose up -d`): FAIL — `touch()` still defaults to `"clarifying"`, and `set_status()` doesn't accept `clarify_question`/`error` kwargs (`TypeError`). If Postgres isn't reachable, these are skipped — run `docker compose up -d` from `backend/` first.
+
+- [ ] **Step 3: Write the migration**
+
+Create `backend/src/agentdrops/db/migrations/versions/0002_add_queued_status_and_session_detail_fields.py`:
+
+```python
+"""add queued status default and clarify_question/error columns
+
+Revision ID: 0002
+Revises: 0001
+Create Date: 2026-07-22
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0002"
+down_revision: str | None = "0001"
+branch_labels: Sequence[str] | None = None
+depends_on: Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.alter_column("sessions", "status", server_default=sa.text("'queued'"))
+    op.add_column("sessions", sa.Column("clarify_question", sa.Text(), nullable=True))
+    op.add_column("sessions", sa.Column("error", sa.Text(), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column("sessions", "error")
+    op.drop_column("sessions", "clarify_question")
+    op.alter_column("sessions", "status", server_default=sa.text("'clarifying'"))
+```
+
+Run: `cd backend && alembic upgrade head` (requires `docker compose up -d` first).
+Expected: migration applies with no errors.
+
+- [ ] **Step 4: Update the ORM model**
+
+In `backend/src/agentdrops/db/models/sessions.py`, change:
+
+```python
+    status: Mapped[str] = mapped_column(
+        sa.Text(), nullable=False, server_default=sa.text("'clarifying'")
+    )
+    report: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+```
+
+to:
+
+```python
+    status: Mapped[str] = mapped_column(
+        sa.Text(), nullable=False, server_default=sa.text("'queued'")
+    )
+    report: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    clarify_question: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+```
+
+- [ ] **Step 5: Update `repository/sessions.py`**
+
+Change the `Status` literal (line 22):
+
+```python
+Status = Literal["clarifying", "running", "done", "failed"]
+```
+
+to:
+
+```python
+Status = Literal["queued", "clarifying", "running", "done", "failed"]
+```
+
+Change `SessionRecord` (lines 25-34):
+
+```python
+@dataclass
+class SessionRecord:
+    """One research thread's session-level metadata, as opposed to the graph's own state."""
+
+    thread_id: str
+    title: str
+    created_at: datetime
+    status: Status = "clarifying"
+    report: str | None = None
+    sources: list[dict[str, str]] = field(default_factory=list)
+```
+
+to:
+
+```python
+@dataclass
+class SessionRecord:
+    """One research thread's session-level metadata, as opposed to the graph's own state."""
+
+    thread_id: str
+    title: str
+    created_at: datetime
+    status: Status = "queued"
+    report: str | None = None
+    sources: list[dict[str, str]] = field(default_factory=list)
+    clarify_question: str | None = None
+    error: str | None = None
+```
+
+Change `_to_record` (lines 37-45):
+
+```python
+def _to_record(row: SessionTable) -> SessionRecord:
+    return SessionRecord(
+        thread_id=row.thread_id,
+        title=row.title,
+        created_at=row.created_at,
+        status=type_cast(Status, row.status),
+        report=row.report,
+        sources=row.sources,
+    )
+```
+
+to:
+
+```python
+def _to_record(row: SessionTable) -> SessionRecord:
+    return SessionRecord(
+        thread_id=row.thread_id,
+        title=row.title,
+        created_at=row.created_at,
+        status=type_cast(Status, row.status),
+        report=row.report,
+        sources=row.sources,
+        clarify_question=row.clarify_question,
+        error=row.error,
+    )
+```
+
+Change `set_status` (lines 70-80):
+
+```python
+    async def set_status(
+        self, thread_id: str, status: Status, *, report: str | None = None
+    ) -> None:
+        async with self._session_factory() as session:
+            values: dict[str, object] = {"status": status, "updated_at": func.now()}
+            if report is not None:
+                values["report"] = report
+            await session.execute(
+                update(SessionTable).where(SessionTable.thread_id == thread_id).values(**values)
+            )
+            await session.commit()
+```
+
+to:
+
+```python
+    async def set_status(
+        self,
+        thread_id: str,
+        status: Status,
+        *,
+        report: str | None = None,
+        clarify_question: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        async with self._session_factory() as session:
+            values: dict[str, object] = {"status": status, "updated_at": func.now()}
+            if report is not None:
+                values["report"] = report
+            if clarify_question is not None:
+                values["clarify_question"] = clarify_question
+            if error is not None:
+                values["error"] = error
+            await session.execute(
+                update(SessionTable).where(SessionTable.thread_id == thread_id).values(**values)
+            )
+            await session.commit()
+```
+
+- [ ] **Step 6: Run the repository tests to verify they pass**
+
+Run: `pytest tests/unit/repository/test_sessions.py -v`
+Expected: PASS.
+
+- [ ] **Step 7: Wire the new fields through `ChatService`**
+
+In `backend/src/agentdrops/service/chat_service.py`, change the clarify branch (lines 61-75):
+
+```python
+                        if node_name == "clarify_with_user" and node_output.get(
+                            "needs_clarification"
+                        ):
+                            question = str(node_output["messages"][-1].content)
+                            await self._sessions.set_status(thread_id, "clarifying")
+                            outcome = "clarify"
+```
+
+to:
+
+```python
+                        if node_name == "clarify_with_user" and node_output.get(
+                            "needs_clarification"
+                        ):
+                            question = str(node_output["messages"][-1].content)
+                            await self._sessions.set_status(
+                                thread_id, "clarifying", clarify_question=question
+                            )
+                            outcome = "clarify"
+```
+
+Change `record_failure` (lines 98-104):
+
+```python
+    async def record_failure(self, thread_id: str, *, operation: str, error: str) -> None:
+        """Record a failed turn: session status plus an audit entry, shared by both endpoints'
+        except blocks so the failure side effects can't diverge."""
+        await self._sessions.set_status(thread_id, "failed")
+        await self._audit.record(
+            thread_id, operation=operation, status="failed", detail={"error": error}
+        )
+```
+
+to:
+
+```python
+    async def record_failure(self, thread_id: str, *, operation: str, error: str) -> None:
+        """Record a failed turn: session status plus an audit entry, shared by both endpoints'
+        except blocks so the failure side effects can't diverge."""
+        await self._sessions.set_status(thread_id, "failed", error=error)
+        await self._audit.record(
+            thread_id, operation=operation, status="failed", detail={"error": error}
+        )
+```
+
+(The audit log's own `detail={"error": error}` write is unchanged — existing tests asserting on it, e.g. `tests/unit/api/v1/test_chat.py::test_chat_returns_502_and_marks_session_failed_on_graph_error`, still pass.)
+
+- [ ] **Step 8: Fix `ResearchService.get_status` to short-circuit on `queued` (like it already does for `failed`)**
+
+In `backend/src/agentdrops/service/research_service.py`, change:
+
+```python
+        session = await self._sessions.get(thread_id)
+        if session is not None and session.status == "failed":
+            return ResearchStatusResponse(
+                thread_id=thread_id, status="failed", research_brief=None, report=None
+            )
+```
+
+to:
+
+```python
+        session = await self._sessions.get(thread_id)
+        if session is not None and session.status in ("failed", "queued"):
+            return ResearchStatusResponse(
+                thread_id=thread_id, status=session.status, research_brief=None, report=None
+            )
+```
+
+Without this, `GET /research/{thread_id}` for a freshly enqueued (not yet started) turn falls through to `self._graph.aget_state(config)`, finds an empty checkpoint, and returns `None` (404) — even though the session row already correctly shows `"queued"`. This is what makes `"queued"` observable through the status endpoint the frontend actually polls, not just the sidebar list.
+
+- [ ] **Step 9: Update `api/v1/schema.py`'s status literals**
+
+Change (two occurrences — `ResearchStatusResponse.status` and `SessionSummary.status`):
+
+```python
+    status: Literal["clarifying", "running", "done", "failed"]
+```
+
+to:
+
+```python
+    status: Literal["queued", "clarifying", "running", "done", "failed"]
+```
+
+- [ ] **Step 10: Update `tests/unit/api/v1/conftest.py`'s fake `SessionStore`/`SessionRecord` default**
+
+The `_FakeSessionStore.touch` (lines 95-99) constructs a bare `SessionRecord(...)`, which will now default to `status="queued"` automatically once Step 5 lands (no edit needed there) — but its `set_status` (lines 101-109) needs the same new kwargs the real one has:
+
+```python
+    async def set_status(
+        self, thread_id: str, status: Status, *, report: str | None = None
+    ) -> None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return
+        session.status = status
+        if report is not None:
+            session.report = report
+```
+
+to:
+
+```python
+    async def set_status(
+        self,
+        thread_id: str,
+        status: Status,
+        *,
+        report: str | None = None,
+        clarify_question: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return
+        session.status = status
+        if report is not None:
+            session.report = report
+        if clarify_question is not None:
+            session.clarify_question = clarify_question
+        if error is not None:
+            session.error = error
+```
+
+- [ ] **Step 11: Run the full backend suite**
+
+Run: `pytest`
+Expected: PASS (the existing `tests/unit/api/v1/test_chat.py` suite still passes unchanged — it never asserted `status == "clarifying"` as an initial default, only after a turn actually runs).
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add backend/src/agentdrops/db/migrations/versions/0002_add_queued_status_and_session_detail_fields.py \
+        backend/src/agentdrops/db/models/sessions.py \
+        backend/src/agentdrops/repository/sessions.py \
+        backend/src/agentdrops/service/chat_service.py \
+        backend/src/agentdrops/service/research_service.py \
+        backend/src/agentdrops/api/v1/schema.py \
+        backend/tests/unit/repository/test_sessions.py \
+        backend/tests/unit/api/v1/conftest.py
+git commit -m "feat(backend): add queued session status and clarify_question/error detail fields"
+```
+
+---
+
+### Task 3: Injectable, Postgres-backed LangGraph checkpointer
+
+**Files:**
+- Create: `backend/src/agentdrops/agents/checkpointer.py`
+- Modify: `backend/src/agentdrops/agents/graph.py`
+- Modify: `backend/src/agentdrops/main.py`
+- Modify: `backend/tests/unit/api/v1/conftest.py`
+- Test: `backend/tests/unit/agents/test_graph.py` (new file)
+- Test: `backend/tests/unit/agents/test_checkpointer.py` (new file)
+
+**Interfaces:**
+- Produces: `build_market_researcher(settings: Settings, client: httpx.AsyncClient, checkpointer: BaseCheckpointSaver[Any]) -> CompiledStateGraph[Any, Any, Any, Any]` (checkpointer now injected, `InMemorySaver` no longer hardcoded); `def strip_asyncpg_dialect(database_url: str) -> str` (pure function, `"postgresql+asyncpg://..."` → `"postgresql://..."`); `def checkpointer(settings: Settings) -> AbstractAsyncContextManager[BaseCheckpointSaver[Any]]` — an async context manager both `agentdrops/main.py`'s lifespan (Task 3) and the worker bootstrap (Task 7) use, so the DSN-stripping logic exists in exactly one place.
+
+This is what makes graph state visible across processes: today's `InMemorySaver` means the API's own `graph.aget_state(config)` call (`research_service.py:27`) only ever sees state written by `graph.astream()` calls made *in that same process* — which is fine today (the API calls both), but breaks the moment `astream()` moves to a worker process (Task 6-7). Both the API and the worker need a checkpointer backed by the same Postgres database.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `backend/tests/unit/agents/test_checkpointer.py`:
+
+```python
+from agentdrops.agents.checkpointer import strip_asyncpg_dialect
+
+
+def test_strip_asyncpg_dialect_removes_the_sqlalchemy_prefix() -> None:
+    assert (
+        strip_asyncpg_dialect("postgresql+asyncpg://u:p@localhost:5432/agentdrops")
+        == "postgresql://u:p@localhost:5432/agentdrops"
+    )
+
+
+def test_strip_asyncpg_dialect_is_a_noop_if_already_plain() -> None:
+    assert (
+        strip_asyncpg_dialect("postgresql://u:p@localhost:5432/agentdrops")
+        == "postgresql://u:p@localhost:5432/agentdrops"
+    )
+```
 
 Create `backend/tests/unit/agents/test_graph.py`:
 
@@ -178,16 +541,56 @@ async def test_build_market_researcher_compiles_with_the_given_checkpointer() ->
     assert graph.checkpointer is checkpointer
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pytest tests/unit/agents/test_graph.py -v`
-Expected: FAIL — `build_market_researcher() takes 2 positional arguments but 3 were given`.
+Run: `pytest tests/unit/agents/test_checkpointer.py tests/unit/agents/test_graph.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'agentdrops.agents.checkpointer'`, then (once that's created) `build_market_researcher() takes 2 positional arguments but 3 were given`.
 
-- [ ] **Step 3: Add the `checkpointer` parameter**
+- [ ] **Step 3: Implement `strip_asyncpg_dialect` and the `checkpointer` context manager**
+
+Create `backend/src/agentdrops/agents/checkpointer.py`:
+
+```python
+"""Postgres-backed LangGraph checkpointer, shared by the API (read-only `aget_state` calls) and
+the Celery worker (the only process that calls `astream`), so both see the same graph state.
+
+`settings.database_url` is the SQLAlchemy-style `postgresql+asyncpg://` DSN `db/engine.py` uses
+for the session-store engine — `langgraph-checkpoint-postgres` uses `psycopg` (v3) directly, which
+expects the plain `postgresql://` form, so the dialect prefix is stripped here rather than by
+changing the shared setting itself.
+"""
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from agentdrops.config import Settings
+
+_ASYNCPG_DIALECT_PREFIX = "postgresql+asyncpg://"
+
+
+def strip_asyncpg_dialect(database_url: str) -> str:
+    if database_url.startswith(_ASYNCPG_DIALECT_PREFIX):
+        return "postgresql://" + database_url[len(_ASYNCPG_DIALECT_PREFIX) :]
+    return database_url
+
+
+@asynccontextmanager
+async def checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointSaver[Any]]:
+    dsn = strip_asyncpg_dialect(settings.database_url)
+    async with AsyncPostgresSaver.from_conn_string(dsn) as saver:
+        await saver.setup()
+        yield saver
+```
+
+- [ ] **Step 4: Add the `checkpointer` parameter to `build_market_researcher`**
 
 In `backend/src/agentdrops/agents/graph.py`:
 
-Remove the import at line 6:
+Remove line 6:
 ```python
 from langgraph.checkpoint.memory import InMemorySaver
 ```
@@ -197,7 +600,7 @@ Add instead:
 from langgraph.checkpoint.base import BaseCheckpointSaver
 ```
 
-Change the function signature (line 22-24) from:
+Change the signature (lines 22-24):
 ```python
 def build_market_researcher(
     settings: Settings, client: httpx.AsyncClient
@@ -210,7 +613,7 @@ def build_market_researcher(
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
 ```
 
-Change the last line (line 80) from:
+Change the last line (line 80):
 ```python
     return graph.compile(checkpointer=InMemorySaver())
 ```
@@ -219,253 +622,122 @@ to:
     return graph.compile(checkpointer=checkpointer)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run the new tests to verify they pass**
 
-Run: `pytest tests/unit/agents/test_graph.py -v`
+Run: `pytest tests/unit/agents/test_checkpointer.py tests/unit/agents/test_graph.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Update `agentdrops/main.py`'s lifespan to build and hold open a real checkpointer**
 
-```bash
-git add backend/src/agentdrops/agents/graph.py backend/tests/unit/agents/test_graph.py
-git commit -m "feat(backend): make build_market_researcher's checkpointer injectable"
+Change the imports (add):
+```python
+from agentdrops.agents.checkpointer import checkpointer
 ```
 
----
-
-### Task 3: Redis-backed `JobStore`
-
-**Files:**
-- Create: `backend/src/agentdrops/jobs/__init__.py` (empty)
-- Create: `backend/src/agentdrops/jobs/store.py`
-- Test: `backend/tests/unit/jobs/__init__.py` (empty)
-- Test: `backend/tests/unit/jobs/test_store.py`
-
-**Interfaces:**
-- Consumes: `redis.asyncio.Redis` (or `fakeredis.aioredis.FakeRedis`, same interface) instance, constructed by the caller.
-- Produces:
-  - `JobStatus = Literal["queued", "running", "clarifying", "done", "failed"]`
-  - `class JobRecord(TypedDict)`: `thread_id: str`, `title: str`, `created_at: str`, `status: JobStatus`, `report: str | None`, `sources: list[dict[str, str]]`, `error: str | None`, `clarify_question: str | None`
-  - `class JobStore`: `__init__(self, redis: Redis) -> None`; `async def touch(self, thread_id: str, *, title: str) -> JobRecord`; `async def set_status(self, thread_id: str, status: JobStatus, *, report: str | None = None, error: str | None = None, clarify_question: str | None = None) -> None`; `async def add_source(self, thread_id: str, topic: str, summary: str) -> None`; `async def get(self, thread_id: str) -> JobRecord | None`; `async def list_recent(self) -> list[JobRecord]`
-
-This replaces `api/sessions.py`'s in-memory `SessionStore` (deleted in Task 8) as the single source of truth for job status, consolidating today's split between the in-memory `SessionStore` (only tracked `failed`) and the LangGraph checkpoint (tracked everything else). Each job is stored as one JSON-serialized Redis string at `job:{thread_id}` (simpler and safer for a nested `sources` list than Redis's native `HASH` type, which only holds flat string fields) plus a Redis sorted set `jobs:index` (`thread_id` scored by `created_at` epoch) so `list_recent` doesn't need `KEYS`/`SCAN`.
-
-- [ ] **Step 1: Write the failing tests**
-
-Create `backend/tests/unit/jobs/__init__.py` (empty file).
-
-Create `backend/tests/unit/jobs/test_store.py`:
+Change the lifespan body (lines 42-57):
 
 ```python
-from fakeredis.aioredis import FakeRedis
-
-from agentdrops.jobs.store import JobStore
-
-
-async def _store() -> JobStore:
-    redis = FakeRedis(decode_responses=True)
-    return JobStore(redis)
-
-
-async def test_touch_creates_a_queued_record() -> None:
-    jobs = await _store()
-
-    record = await jobs.touch("t1", title="Research the EV market")
-
-    assert record["status"] == "queued"
-    assert record["title"] == "Research the EV market"
-    assert record["report"] is None
-    assert record["sources"] == []
-    assert (await jobs.get("t1")) == record
-
-
-async def test_touch_is_a_noop_on_the_second_call() -> None:
-    jobs = await _store()
-    first = await jobs.touch("t1", title="Research the EV market")
-
-    second = await jobs.touch("t1", title="A different title")
-
-    assert second == first
-
-
-async def test_set_status_updates_report_and_error() -> None:
-    jobs = await _store()
-    await jobs.touch("t1", title="Research the EV market")
-
-    await jobs.set_status("t1", "done", report="# Report")
-
-    record = await jobs.get("t1")
-    assert record is not None
-    assert record["status"] == "done"
-    assert record["report"] == "# Report"
-
-
-async def test_set_status_on_unknown_thread_is_a_noop() -> None:
-    jobs = await _store()
-
-    await jobs.set_status("does-not-exist", "failed", error="boom")
-
-    assert (await jobs.get("does-not-exist")) is None
-
-
-async def test_add_source_appends() -> None:
-    jobs = await _store()
-    await jobs.touch("t1", title="Research the EV market")
-
-    await jobs.add_source("t1", "EU", "EU findings")
-    await jobs.add_source("t1", "US", "US findings")
-
-    record = await jobs.get("t1")
-    assert record is not None
-    assert record["sources"] == [
-        {"topic": "EU", "summary": "EU findings"},
-        {"topic": "US", "summary": "US findings"},
-    ]
-
-
-async def test_get_unknown_thread_returns_none() -> None:
-    jobs = await _store()
-
-    assert (await jobs.get("does-not-exist")) is None
-
-
-async def test_list_recent_returns_newest_first() -> None:
-    jobs = await _store()
-    await jobs.touch("older", title="Research the fintech market")
-    await jobs.touch("newer", title="Research the EV market")
-
-    records = await jobs.list_recent()
-
-    assert [r["thread_id"] for r in records] == ["newer", "older"]
+    try:
+        engine = create_engine(settings)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                session_factory = create_session_factory(engine)
+                graph = build_market_researcher(settings, client)
+                sessions = SessionStore(session_factory)
+                audit = AuditLog(session_factory)
+                app.state.engine = engine
+                app.state.audit = audit
+                app.state.chat_service = ChatService(graph, sessions, audit)
+                app.state.research_service = ResearchService(graph, sessions)
+                app.state.sessions_service = SessionsService(sessions)
+                yield
+        finally:
+            await engine.dispose()
+    finally:
+        providers.shutdown()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `pytest tests/unit/jobs/test_store.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'agentdrops.jobs'`.
-
-- [ ] **Step 3: Implement `JobStore`**
-
-Create `backend/src/agentdrops/jobs/__init__.py` (empty).
-
-Create `backend/src/agentdrops/jobs/store.py`:
+to:
 
 ```python
-"""Redis-backed job status: the single source of truth for a thread's status/report/sources.
-
-Replaces the old in-memory `SessionStore` + LangGraph-checkpoint hybrid read — every status
-transition a worker makes lands here, and the API reads only from here, never from a checkpoint.
-"""
-
-import json
-from datetime import UTC, datetime
-from typing import Literal, TypedDict, cast
-
-from redis.asyncio import Redis
-
-JobStatus = Literal["queued", "running", "clarifying", "done", "failed"]
-
-_INDEX_KEY = "jobs:index"
-
-
-class JobRecord(TypedDict):
-    thread_id: str
-    title: str
-    created_at: str
-    status: JobStatus
-    report: str | None
-    sources: list[dict[str, str]]
-    error: str | None
-    clarify_question: str | None
-
-
-def _key(thread_id: str) -> str:
-    return f"job:{thread_id}"
-
-
-class JobStore:
-    """Tracks one `JobRecord` per thread_id, keyed by first sight of that thread."""
-
-    def __init__(self, redis: Redis) -> None:
-        self._redis = redis
-
-    async def touch(self, thread_id: str, *, title: str) -> JobRecord:
-        """Create a job record the first time a thread is seen; a no-op afterward."""
-        existing = await self.get(thread_id)
-        if existing is not None:
-            return existing
-        created_at = datetime.now(UTC)
-        record: JobRecord = {
-            "thread_id": thread_id,
-            "title": title,
-            "created_at": created_at.isoformat(),
-            "status": "queued",
-            "report": None,
-            "sources": [],
-            "error": None,
-            "clarify_question": None,
-        }
-        await self._write(thread_id, record)
-        await self._redis.zadd(_INDEX_KEY, {thread_id: created_at.timestamp()})
-        return record
-
-    async def set_status(
-        self,
-        thread_id: str,
-        status: JobStatus,
-        *,
-        report: str | None = None,
-        error: str | None = None,
-        clarify_question: str | None = None,
-    ) -> None:
-        record = await self.get(thread_id)
-        if record is None:
-            return
-        record["status"] = status
-        if report is not None:
-            record["report"] = report
-        if error is not None:
-            record["error"] = error
-        if clarify_question is not None:
-            record["clarify_question"] = clarify_question
-        await self._write(thread_id, record)
-
-    async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
-        record = await self.get(thread_id)
-        if record is None:
-            return
-        record["sources"].append({"topic": topic, "summary": summary})
-        await self._write(thread_id, record)
-
-    async def get(self, thread_id: str) -> JobRecord | None:
-        raw = await self._redis.get(_key(thread_id))
-        if raw is None:
-            return None
-        return cast(JobRecord, json.loads(raw))
-
-    async def list_recent(self) -> list[JobRecord]:
-        thread_ids = await self._redis.zrevrange(_INDEX_KEY, 0, -1)
-        records = []
-        for thread_id in thread_ids:
-            record = await self.get(thread_id)
-            if record is not None:
-                records.append(record)
-        return records
-
-    async def _write(self, thread_id: str, record: JobRecord) -> None:
-        await self._redis.set(_key(thread_id), json.dumps(record))
+    try:
+        engine = create_engine(settings)
+        try:
+            async with (
+                httpx.AsyncClient(timeout=30.0) as client,
+                checkpointer(settings) as saver,
+            ):
+                session_factory = create_session_factory(engine)
+                graph = build_market_researcher(settings, client, saver)
+                sessions = SessionStore(session_factory)
+                audit = AuditLog(session_factory)
+                app.state.engine = engine
+                app.state.sessions = sessions
+                app.state.audit = audit
+                app.state.chat_service = ChatService(graph, sessions, audit)
+                app.state.research_service = ResearchService(graph, sessions)
+                app.state.sessions_service = SessionsService(sessions)
+                yield
+        finally:
+            await engine.dispose()
+    finally:
+        providers.shutdown()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+(`app.state.sessions` is newly exposed — Task 8's routes need direct `SessionStore` access to touch a session before enqueueing, the same way `ChatService.run_turn` already does as its first line.)
 
-Run: `pytest tests/unit/jobs/test_store.py -v`
-Expected: PASS (7 tests).
+- [ ] **Step 7: Update `tests/unit/api/v1/conftest.py`'s `client`/`failing_client` fixtures for the 3-arg `build_market_researcher`**
 
-- [ ] **Step 5: Commit**
+Change (lines 155-157 and 166-168, both fixtures):
+```python
+    monkeypatch.setattr(
+        main_module, "build_market_researcher", lambda settings, client: _FakeGraph()
+    )
+```
+to:
+```python
+    monkeypatch.setattr(
+        main_module,
+        "build_market_researcher",
+        lambda settings, client, checkpointer: _FakeGraph(),
+    )
+```
+
+Also add a fake `checkpointer` context manager and patch it in, since `main.py`'s lifespan now calls it. Add to `conftest.py` (near `_FakeEngine`):
+
+```python
+from contextlib import asynccontextmanager
+
+
+class _FakeCheckpointer:
+    pass
+
+
+@asynccontextmanager
+async def _fake_checkpointer(_settings: object) -> AsyncIterator[_FakeCheckpointer]:
+    yield _FakeCheckpointer()
+```
+
+And in `_patch_db` (or both fixtures directly), add:
+```python
+    monkeypatch.setattr(main_module, "checkpointer", _fake_checkpointer)
+```
+
+- [ ] **Step 8: Run the full backend suite**
+
+Run: `pytest && mypy src`
+Expected: both PASS.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add backend/src/agentdrops/jobs backend/tests/unit/jobs
-git commit -m "feat(backend): add Redis-backed JobStore"
+git add backend/src/agentdrops/agents/checkpointer.py \
+        backend/src/agentdrops/agents/graph.py \
+        backend/src/agentdrops/main.py \
+        backend/tests/unit/agents/test_checkpointer.py \
+        backend/tests/unit/agents/test_graph.py \
+        backend/tests/unit/api/v1/conftest.py
+git commit -m "feat(backend): make the LangGraph checkpointer injectable, backed by Postgres"
 ```
 
 ---
@@ -473,16 +745,20 @@ git commit -m "feat(backend): add Redis-backed JobStore"
 ### Task 4: Redis pub/sub event helpers
 
 **Files:**
+- Create: `backend/src/agentdrops/jobs/__init__.py` (empty)
 - Create: `backend/src/agentdrops/jobs/events.py`
+- Test: `backend/tests/unit/jobs/__init__.py` (empty)
 - Test: `backend/tests/unit/jobs/test_events.py`
 
 **Interfaces:**
 - Consumes: `redis.asyncio.Redis` instance.
 - Produces: `async def publish_event(redis: Redis, thread_id: str, event: dict[str, Any]) -> None`; `def subscribe_events(redis: Redis, thread_id: str) -> AsyncIterator[dict[str, Any]]` (async generator).
 
-Channel naming: `events:{thread_id}`. This is the pub/sub side of the design — `worker/runner.py` (Task 6) publishes, `api/main.py` (Task 8) subscribes.
+Channel naming: `events:{thread_id}`. The worker (Task 6) publishes, `api/v1/chat.py` (Task 8) subscribes. This is the only new Redis-touching module in this plan — session/report/audit state stays entirely in Postgres (Task 2), so `jobs/` holds nothing but the live-event transport.
 
 - [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/unit/jobs/__init__.py` (empty file).
 
 Create `backend/tests/unit/jobs/test_events.py`:
 
@@ -536,6 +812,8 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'agentdrops.jobs.events
 
 - [ ] **Step 3: Implement the pub/sub helpers**
 
+Create `backend/src/agentdrops/jobs/__init__.py` (empty).
+
 Create `backend/src/agentdrops/jobs/events.py`:
 
 ```python
@@ -580,7 +858,7 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/agentdrops/jobs/events.py backend/tests/unit/jobs/test_events.py
+git add backend/src/agentdrops/jobs backend/tests/unit/jobs
 git commit -m "feat(backend): add Redis pub/sub helpers for live turn events"
 ```
 
@@ -598,7 +876,7 @@ git commit -m "feat(backend): add Redis pub/sub helpers for live turn events"
 - Consumes: `agentdrops.config.Settings`.
 - Produces: `celery_app: Celery` (module-level, unconfigured broker/backend at import time); `def configure_celery(settings: Settings) -> None`.
 
-`celery_app` is constructed with no broker/backend at import time deliberately: `Celery(...)`'s constructor itself needs no settings, so importing this module never requires a populated `.env`, matching `get_settings()`'s own lazy-construction pattern used throughout the rest of the codebase. `configure_celery` is called explicitly once at real process startup (API lifespan in Task 8, worker entrypoint in Task 7) — never at import time.
+`celery_app` is constructed with no broker/backend at import time deliberately: `Celery(...)`'s constructor needs no settings, so importing this module never requires a populated `.env`, matching `get_settings()`'s own lazy-construction pattern. `configure_celery` is called explicitly once at real process startup (API lifespan in Task 8, worker entrypoint in Task 7) — never at import time.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -670,10 +948,10 @@ git commit -m "feat(backend): add Celery app with lazily-configured Redis broker
 - Test: `backend/tests/unit/worker/test_runner.py`
 
 **Interfaces:**
-- Consumes: a compiled graph exposing `async def astream(self, inputs: dict, config: dict, stream_mode: list[str]) -> AsyncIterator[tuple[str, dict]]` (structurally, same shape `_FakeGraph`/`_FailingGraph` in the old `tests/unit/api/test_main.py` already used); `JobStore` (Task 3); `publish_event` (Task 4).
-- Produces: `async def run_turn(graph: Any, inputs: dict[str, Any], config: dict[str, Any], thread_id: str, jobs: JobStore, redis: Redis) -> None` — Task 7's Celery task is the only caller.
+- Consumes: `ChatService` (existing, `service/chat_service.py`) constructed by the caller; `publish_event` (Task 4).
+- Produces: `async def run_turn(chat_service: ChatService, thread_id: str, message: str, *, operation: str, redis: Redis) -> None` — Task 7's Celery task is the only caller.
 
-This is today's `_run_graph_turn` (`api/main.py:133-184`) adapted to update `JobStore` + publish to Redis instead of mutating a `SessionStore` and yielding to an HTTP SSE generator — it also now sets `status="running"` immediately (rather than only when the `supervisor` node is reached), since "running" should cover the whole span from the worker picking up the task, matching the design spec's data flow.
+Unlike the original design (which reimplemented the `astream` loop against a new Redis `JobStore`), this reuses `ChatService.run_turn`/`record_failure` verbatim — the exact class `api/v1/chat.py`'s routes called directly before this change. The only new behavior is publishing each yielded event to Redis instead of it being drained by an HTTP response generator.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -685,51 +963,63 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fakeredis.aioredis import FakeRedis
-from langchain_core.messages import AIMessage
 
-from agentdrops.jobs.store import JobStore
+from agentdrops.service.chat_service import ChatService
 from agentdrops.worker.runner import run_turn
 
 
-class _FakeGraph:
-    """Same two fixed turns as the old `tests/unit/api/test_main.py::_FakeGraph`: first turn
-    asks a clarification, second turn streams progress/source events then reports."""
-
+class _FakeSessions:
     def __init__(self) -> None:
-        self._turn = 0
+        self.statuses: list[tuple[str, str]] = []
+
+    async def touch(self, thread_id: str, *, title: str) -> None:
+        return None
+
+    async def set_status(self, thread_id: str, status: str, **_kwargs: object) -> None:
+        self.statuses.append((thread_id, status))
+
+    async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
+        return None
+
+
+class _FakeAudit:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    async def record(self, thread_id: str, **kwargs: object) -> None:
+        self.records.append({"thread_id": thread_id, **kwargs})
+
+
+class _FakeGraph:
+    """Streams a clarify turn immediately — enough to exercise the publish path without
+    re-testing `ChatService.run_turn`'s own node-mapping logic (already covered by
+    `tests/unit/api/v1/test_chat.py`)."""
 
     async def astream(
         self, _inputs: dict, _config: dict, _stream_mode: list[str]
     ) -> AsyncIterator[tuple[str, dict]]:
-        self._turn += 1
-        if self._turn == 1:
-            yield (
-                "updates",
-                {
-                    "clarify_with_user": {
-                        "needs_clarification": True,
-                        "messages": [AIMessage(content="Which region should I focus on?")],
-                    }
-                },
-            )
-            return
-        yield ("updates", {"clarify_with_user": {"needs_clarification": False, "messages": []}})
-        yield ("updates", {"write_research_brief": {}})
-        yield ("custom", {"type": "progress", "step": "researching", "detail": "Researching: EU"})
-        yield ("custom", {"type": "source", "topic": "EU", "summary": "EU findings"})
-        yield ("updates", {"supervisor": {}})
         yield (
             "updates",
-            {"final_report_generation": {"final_report": "# EV Charging Market Report"}},
+            {
+                "clarify_with_user": {
+                    "needs_clarification": True,
+                    "messages": [_Message("Which region should I focus on?")],
+                }
+            },
         )
+
+
+class _Message:
+    def __init__(self, content: str) -> None:
+        self.content = content
 
 
 class _FailingGraph:
     async def astream(
         self, _inputs: dict, _config: dict, _stream_mode: list[str]
     ) -> AsyncIterator[tuple[str, dict]]:
-        yield ("updates", {"clarify_with_user": {"needs_clarification": False, "messages": []}})
         raise RuntimeError("LLM provider unavailable")
+        yield ("updates", {})  # pragma: no cover — makes this an async generator
 
 
 async def _published(redis: FakeRedis, thread_id: str) -> list[dict[str, Any]]:
@@ -739,71 +1029,49 @@ async def _published(redis: FakeRedis, thread_id: str) -> list[dict[str, Any]]:
 
 class _RecordingRedis(FakeRedis):
     """Records every `publish` call to a list key, so the test can assert on emitted events
-    without standing up a second pub/sub subscriber (that's already covered by
-    `tests/unit/jobs/test_events.py`) — this test is about `run_turn`'s own logic."""
+    without a second pub/sub subscriber (already covered by `tests/unit/jobs/test_events.py`)."""
 
     async def publish(self, channel: str, message: str) -> int:  # type: ignore[override]
         await self.rpush(f"_test_published:{channel.removeprefix('events:')}", message)
         return 1
 
 
-async def test_run_turn_first_call_sets_clarifying_and_publishes_clarify_event() -> None:
+async def test_run_turn_publishes_every_event_from_chat_service() -> None:
     redis = _RecordingRedis(decode_responses=True)
-    jobs = JobStore(redis)
-    await jobs.touch("t1", title="Research the EV charging market")
+    sessions = _FakeSessions()
+    audit = _FakeAudit()
+    chat_service = ChatService(_FakeGraph(), sessions, audit)  # type: ignore[arg-type]
 
-    await run_turn(_FakeGraph(), {}, {}, "t1", jobs, redis)
+    await run_turn(chat_service, "t1", "Research the EV market", operation="chat_stream", redis=redis)
 
-    record = await jobs.get("t1")
-    assert record is not None
-    assert record["status"] == "clarifying"
-    assert record["clarify_question"] == "Which region should I focus on?"
     published = await _published(redis, "t1")
     assert published == [
         {"type": "clarify", "thread_id": "t1", "response": "Which region should I focus on?"}
     ]
+    assert sessions.statuses == [("t1", "clarifying")]
 
 
-async def test_run_turn_second_call_persists_sources_and_publishes_done() -> None:
+async def test_run_turn_records_failure_and_publishes_error_on_exception() -> None:
     redis = _RecordingRedis(decode_responses=True)
-    jobs = JobStore(redis)
-    await jobs.touch("t1", title="Research the EV charging market")
-    graph = _FakeGraph()
-    graph._turn = 1  # pretend the clarify turn already happened
+    sessions = _FakeSessions()
+    audit = _FakeAudit()
+    chat_service = ChatService(_FailingGraph(), sessions, audit)  # type: ignore[arg-type]
 
-    await run_turn(graph, {}, {}, "t1", jobs, redis)
+    await run_turn(chat_service, "t1", "Research the EV market", operation="chat", redis=redis)
 
-    record = await jobs.get("t1")
-    assert record is not None
-    assert record["status"] == "done"
-    assert record["report"] == "# EV Charging Market Report"
-    assert record["sources"] == [{"topic": "EU", "summary": "EU findings"}]
     published = await _published(redis, "t1")
-    assert {"type": "source", "topic": "EU", "summary": "EU findings"} in published
-    assert published[-1] == {
-        "type": "done",
-        "thread_id": "t1",
-        "report": "# EV Charging Market Report",
-    }
-
-
-async def test_run_turn_marks_failed_and_publishes_error_on_exception() -> None:
-    redis = _RecordingRedis(decode_responses=True)
-    jobs = JobStore(redis)
-    await jobs.touch("t1", title="Research the EV charging market")
-
-    await run_turn(_FailingGraph(), {}, {}, "t1", jobs, redis)
-
-    record = await jobs.get("t1")
-    assert record is not None
-    assert record["status"] == "failed"
-    assert record["error"] == "LLM provider unavailable"
-    published = await _published(redis, "t1")
-    assert published[-1] == {
-        "type": "error",
-        "thread_id": "t1",
-        "message": "LLM provider unavailable",
-    }
+    assert published == [
+        {"type": "error", "thread_id": "t1", "message": "LLM provider unavailable"}
+    ]
+    assert sessions.statuses == [("t1", "failed")]
+    assert audit.records == [
+        {
+            "thread_id": "t1",
+            "operation": "chat",
+            "status": "failed",
+            "detail": {"error": "LLM provider unavailable"},
+        }
+    ]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -816,100 +1084,45 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'agentdrops.worker.runn
 Create `backend/src/agentdrops/worker/runner.py`:
 
 ```python
-"""Drives one graph turn to completion inside a Celery worker, updating Redis job status and
-publishing every event to Redis pub/sub — the worker-process counterpart of the old
-`api/main.py::_run_graph_turn`, which drove the graph in the HTTP request/response cycle instead.
+"""Drives one chat turn inside a Celery worker via `ChatService`, relaying every event to Redis
+pub/sub — the worker-process counterpart of `api/v1/chat.py`'s routes, which used to drive
+`ChatService.run_turn` directly before execution moved off the request/response cycle.
 """
 
 import logging
-from typing import Any
 
 from redis.asyncio import Redis
 
 from agentdrops.jobs.events import publish_event
-from agentdrops.jobs.store import JobStore
-from agentdrops.observability.logging import bind_run_id
-from agentdrops.observability.tracing import traced_span
+from agentdrops.service.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
 
-NODE_LABELS: dict[str, str] = {
-    "clarify_with_user": "Reviewing your request",
-    "write_research_brief": "Planning research approach",
-    "supervisor": "Coordinating research",
-    "final_report_generation": "Synthesizing findings",
-}
-
 
 async def run_turn(
-    graph: Any,
-    inputs: dict[str, Any],
-    config: dict[str, Any],
-    thread_id: str,
-    jobs: JobStore,
-    redis: Redis,
+    chat_service: ChatService, thread_id: str, message: str, *, operation: str, redis: Redis
 ) -> None:
-    with bind_run_id(thread_id), traced_span("research.turn", thread_id=thread_id) as span:
-        outcome = "incomplete"
-        try:
-            await jobs.set_status(thread_id, "running")
-            async for stream_type, chunk in graph.astream(
-                inputs, config=config, stream_mode=["updates", "custom"]
-            ):
-                if stream_type == "custom":
-                    if chunk.get("type") == "source":
-                        await jobs.add_source(thread_id, chunk["topic"], chunk["summary"])
-                        span.add_event("research.source", {"topic": chunk["topic"]})
-                    await publish_event(redis, thread_id, chunk)
-                    continue
-                for node_name, node_output in chunk.items():
-                    if node_name == "clarify_with_user" and node_output.get("needs_clarification"):
-                        question = str(node_output["messages"][-1].content)
-                        await jobs.set_status(thread_id, "clarifying", clarify_question=question)
-                        outcome = "clarify"
-                        await publish_event(
-                            redis,
-                            thread_id,
-                            {"type": "clarify", "thread_id": thread_id, "response": question},
-                        )
-                        return
-                    if node_name == "final_report_generation":
-                        report = node_output["final_report"]
-                        await jobs.set_status(thread_id, "done", report=report)
-                        outcome = "done"
-                        span.set_attribute("research.report_chars", len(report))
-                        await publish_event(
-                            redis,
-                            thread_id,
-                            {"type": "done", "thread_id": thread_id, "report": report},
-                        )
-                        return
-                    label = NODE_LABELS.get(node_name)
-                    if label:
-                        span.add_event("research.stage", {"stage": label})
-                        await publish_event(
-                            redis, thread_id, {"type": "progress", "step": label}
-                        )
-        except Exception as exc:
-            logger.exception("worker turn failed for thread_id=%s", thread_id)
-            await jobs.set_status(thread_id, "failed", error=str(exc))
-            await publish_event(
-                redis, thread_id, {"type": "error", "thread_id": thread_id, "message": str(exc)}
-            )
-        finally:
-            span.set_attribute("research.outcome", outcome)
+    try:
+        async for event in chat_service.run_turn(thread_id, message, operation=operation):
+            await publish_event(redis, thread_id, event)
+    except Exception as exc:
+        logger.exception("worker turn failed for thread_id=%s", thread_id)
+        await chat_service.record_failure(thread_id, operation=operation, error=str(exc))
+        await publish_event(
+            redis, thread_id, {"type": "error", "thread_id": thread_id, "message": str(exc)}
+        )
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/unit/worker/test_runner.py -v`
-Expected: PASS (3 tests).
+Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add backend/src/agentdrops/worker/runner.py backend/tests/unit/worker/test_runner.py
-git commit -m "feat(backend): add worker turn runner (Redis job status + pub/sub)"
+git commit -m "feat(backend): add worker turn runner that relays ChatService events to Redis"
 ```
 
 ---
@@ -922,10 +1135,10 @@ git commit -m "feat(backend): add worker turn runner (Redis job status + pub/sub
 - Test: `backend/tests/unit/worker/test_tasks.py`
 
 **Interfaces:**
-- Consumes: `run_turn` (Task 6), `build_market_researcher` (Task 2), `celery_app` (Task 5).
-- Produces: `run_turn_task` (a `@celery_app.task`, callable directly in tests as `run_turn_task(thread_id, message)`, or via `.delay(thread_id, message)` in production); `celery_app` re-exported from `worker/app.py` as the module the `celery` CLI points `-A` at.
+- Consumes: `run_turn` (Task 6), `checkpointer` (Task 3), `build_market_researcher` (Task 3), `create_engine`/`create_session_factory` (`db/engine.py`, existing), `SessionStore`/`AuditLog` (`repository/`, existing), `ChatService` (`service/chat_service.py`, existing), `celery_app` (Task 5).
+- Produces: `run_turn_task` (a `@celery_app.task`, callable directly in tests as `run_turn_task(thread_id, message, operation)`, or via `.delay(thread_id, message, operation)` in production); `celery_app` re-exported from `worker/app.py` as the module the `celery` CLI points `-A` at.
 
-`_checkpointer` is a small seam specifically so tests never need a real Postgres connection: it's monkeypatched to yield a plain `InMemorySaver()` in tests, and calls the real `AsyncPostgresSaver.from_conn_string(...)` in production.
+Every dependency the task needs (`create_engine`, `SessionStore`, `AuditLog`, `ChatService`, `build_market_researcher`, `checkpointer`) already exists and is already tested in isolation — this task is pure wiring, constructing one of each per task invocation (mirroring how `agentdrops/main.py`'s lifespan constructs one of each per process) and tearing them down after.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -950,15 +1163,37 @@ class _FakeGraph:
     async def astream(
         self, _inputs: dict, _config: dict, _stream_mode: list[str]
     ) -> AsyncIterator[tuple[str, dict]]:
-        yield (
-            "updates",
-            {"final_report_generation": {"final_report": "# Report"}},
-        )
+        yield ("updates", {"final_report_generation": {"final_report": "# Report"}})
+
+
+class _FakeEngine:
+    async def dispose(self) -> None:
+        return None
+
+
+class _FakeSessionStore:
+    async def touch(self, thread_id: str, *, title: str) -> None:
+        return None
+
+    async def set_status(self, thread_id: str, status: str, **_kwargs: object) -> None:
+        return None
+
+    async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
+        return None
+
+
+class _FakeAuditLog:
+    async def record(self, thread_id: str, **kwargs: object) -> None:
+        return None
 
 
 @pytest.fixture(autouse=True)
 def patch_worker_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tasks_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(tasks_module, "create_engine", lambda settings: _FakeEngine())
+    monkeypatch.setattr(tasks_module, "create_session_factory", lambda engine: object())
+    monkeypatch.setattr(tasks_module, "SessionStore", lambda session_factory: _FakeSessionStore())
+    monkeypatch.setattr(tasks_module, "AuditLog", lambda session_factory: _FakeAuditLog())
     monkeypatch.setattr(
         tasks_module,
         "build_market_researcher",
@@ -969,19 +1204,22 @@ def patch_worker_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_checkpointer(_settings: Settings) -> AsyncIterator[BaseCheckpointSaver[Any]]:
         yield InMemorySaver()
 
-    monkeypatch.setattr(tasks_module, "_checkpointer", fake_checkpointer)
+    monkeypatch.setattr(tasks_module, "checkpointer", fake_checkpointer)
     monkeypatch.setattr(
-        tasks_module.Redis, "from_url", staticmethod(lambda *_a, **_k: FakeRedis(decode_responses=True))
+        tasks_module.Redis,
+        "from_url",
+        staticmethod(lambda *_a, **_k: FakeRedis(decode_responses=True)),
     )
 
 
 def test_run_turn_task_drives_a_turn_to_completion() -> None:
     """A plain (non-async) test: `run_turn_task` calls `asyncio.run()` internally, which raises
     if called from within pytest-asyncio's own event loop, so this must not be `async def`."""
-    tasks_module.run_turn_task("t1", "Research the EV charging market")
+    tasks_module.run_turn_task("t1", "Research the EV charging market", "chat_stream")
 
-    # No exception means `_execute` ran end to end; the job's terminal state is covered by
-    # `tests/unit/worker/test_runner.py` already, so this test only proves the wiring works.
+    # No exception means `_execute` ran end to end; `ChatService`'s own event mapping and
+    # `run_turn`'s publish behavior are already covered by `tests/unit/worker/test_runner.py`
+    # and `tests/unit/api/v1/test_chat.py` — this test only proves the wiring works.
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -995,53 +1233,50 @@ Create `backend/src/agentdrops/worker/tasks.py`:
 
 ```python
 """Celery task entrypoint: bridges Celery's synchronous task execution into the async
-graph/runner/Redis stack. This is the only place `asyncio.run` appears, since everything it
-calls into (the graph, JobStore, pub/sub) is async."""
+graph/service/Redis stack. This is the only place `asyncio.run` appears, since everything it
+calls into (the graph, repositories, services, pub/sub) is async."""
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from redis.asyncio import Redis
 
+from agentdrops.agents.checkpointer import checkpointer
 from agentdrops.agents.graph import build_market_researcher
 from agentdrops.config import Settings, get_settings
-from agentdrops.jobs.store import JobStore
+from agentdrops.db.engine import create_engine, create_session_factory
+from agentdrops.repository.audit import AuditLog
+from agentdrops.repository.sessions import SessionStore
+from agentdrops.service.chat_service import ChatService
 from agentdrops.worker.celery_app import celery_app
 from agentdrops.worker.runner import run_turn
 
 
-@asynccontextmanager
-async def _checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointSaver[Any]]:
-    async with AsyncPostgresSaver.from_conn_string(settings.database_url) as saver:
-        await saver.setup()
-        yield saver
-
-
-async def _execute(thread_id: str, message: str, settings: Settings) -> None:
+async def _execute(thread_id: str, message: str, operation: str, settings: Settings) -> None:
     redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        jobs = JobStore(redis)
-        async with (
-            httpx.AsyncClient(timeout=30.0) as client,
-            _checkpointer(settings) as checkpointer,
-        ):
-            graph = build_market_researcher(settings, client, checkpointer)
-            config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
-            inputs = {"messages": [HumanMessage(content=message)]}
-            await run_turn(graph, inputs, config, thread_id, jobs, redis)
+        engine = create_engine(settings)
+        try:
+            async with (
+                httpx.AsyncClient(timeout=30.0) as client,
+                checkpointer(settings) as saver,
+            ):
+                session_factory = create_session_factory(engine)
+                graph = build_market_researcher(settings, client, saver)
+                sessions = SessionStore(session_factory)
+                audit = AuditLog(session_factory)
+                chat_service = ChatService(graph, sessions, audit)
+                await run_turn(chat_service, thread_id, message, operation=operation, redis=redis)
+        finally:
+            await engine.dispose()
     finally:
         await redis.aclose()
 
 
 @celery_app.task(name="agentdrops.run_turn")
-def run_turn_task(thread_id: str, message: str) -> None:
-    asyncio.run(_execute(thread_id, message, get_settings()))
+def run_turn_task(thread_id: str, message: str, operation: str) -> None:
+    asyncio.run(_execute(thread_id, message, operation, get_settings()))
 ```
 
 Create `backend/src/agentdrops/worker/app.py` (the module the `celery` CLI points at — see Task 9):
@@ -1083,132 +1318,121 @@ git commit -m "feat(backend): add Celery task entrypoint and worker process boot
 
 ---
 
-### Task 8: Rewrite the API layer for the async contract
+### Task 8: Make `/chat` and `/chat/stream` enqueue instead of running inline
 
 **Files:**
-- Modify: `backend/src/agentdrops/api/schema.py`
-- Modify: `backend/src/agentdrops/api/main.py`
-- Delete: `backend/src/agentdrops/api/sessions.py`
-- Modify: `backend/tests/unit/api/test_main.py` (full rewrite)
+- Modify: `backend/src/agentdrops/api/v1/schema.py`
+- Modify: `backend/src/agentdrops/api/v1/chat.py`
+- Modify: `backend/tests/unit/api/v1/conftest.py`
+- Modify: `backend/tests/unit/api/v1/test_chat.py`
 
 **Interfaces:**
-- Consumes: `JobStore`, `subscribe_events`/`publish_event` (Tasks 3-4), `run_turn_task` (Task 7), `configure_celery` (Task 5).
-- Produces: `ChatQueuedResponse` (new schema) — nothing downstream in this plan consumes it besides the route itself; the frontend never called synchronous `/chat` (confirmed: `frontend/src/lib/api.ts` only calls `/chat/stream`), so this is a pure backend-internal contract change.
+- Consumes: `app.state.sessions` (`SessionStore`, exposed in Task 3), a new `app.state.redis` (this task), `run_turn_task` (Task 7), `subscribe_events` (Task 4).
+- Produces: `ChatQueuedResponse` (new schema, replaces `ChatResponse` as `/chat`'s response body).
 
-This is the task that actually flips the switch: `/chat` and `/chat/stream` stop calling `graph.astream` and start enqueuing `run_turn_task`; `/research/{id}` and `/research/sessions` stop reading the LangGraph checkpoint and read only `JobStore`.
+This is the task that flips the switch: `/chat` and `/chat/stream` stop calling `ChatService.run_turn` and start enqueuing `run_turn_task`. `/research/{thread_id}` and `/research/sessions` need no changes here — Task 2 already made them correctly reflect `"queued"`/`"failed"` from the session row, and `"running"`/`"clarifying"`/`"done"` from the now-shared Postgres checkpointer (Task 3).
 
-- [ ] **Step 1: Update `api/schema.py`**
+- [ ] **Step 1: Update `api/v1/schema.py`**
 
-Replace the full contents of `backend/src/agentdrops/api/schema.py`:
+Replace `ChatResponse` (used only by `/chat`, which no longer returns a full result inline):
 
 ```python
-"""Request/response contracts for the chat and research HTTP endpoints."""
+class ChatResponse(BaseModel):
+    """One chat turn's result: which thread it belongs to, the reply, and the report once ready."""
 
-from typing import Literal
+    thread_id: str
+    response: str
+    is_followup: bool
+    report: str | None = None
+```
 
-from pydantic import BaseModel
+with:
 
-ResearchStatusValue = Literal["queued", "clarifying", "running", "done", "failed"]
-
-
-class ChatRequest(BaseModel):
-    """One chat turn: an optional existing thread to resume, plus the user's message."""
-
-    thread_id: str | None = None
-    message: str
-
-
+```python
 class ChatQueuedResponse(BaseModel):
-    """Acknowledgement that one chat turn was enqueued; poll /research/{thread_id} or use
-    /chat/stream to observe it. Replaces the old `ChatResponse`, which returned the turn's full
-    result inline — no longer possible once the turn runs in a background worker."""
+    """Acknowledgement that one chat turn was enqueued; poll GET /research/{thread_id} or use
+    /chat/stream to observe it. Replaces `ChatResponse`, which returned the turn's full result
+    inline — no longer possible once the turn runs in a background worker."""
 
     thread_id: str
     status: Literal["queued"] = "queued"
-
-
-class ResearchStatusResponse(BaseModel):
-    """Current state of one research thread, read from its Redis job record."""
-
-    thread_id: str
-    status: ResearchStatusValue
-    report: str | None = None
-
-
-class ReportResponse(BaseModel):
-    """A completed thread's report, for reopening the drawer without re-running research."""
-
-    thread_id: str
-    report: str
-    sources: list[dict[str, str]]
-
-
-class SessionSummary(BaseModel):
-    """One row in the recent-sessions sidebar."""
-
-    id: str
-    title: str
-    created_at: str
-    status: ResearchStatusValue
-
-
-class SessionsResponse(BaseModel):
-    sessions: list[SessionSummary]
 ```
 
-(`ChatResponse` and `research_brief` are dropped — nothing populates `research_brief` once the API no longer reads the LangGraph checkpoint, and `ChatResponse` had exactly one caller, the old synchronous `/chat` body, which no longer exists.)
+- [ ] **Step 2: Add `app.state.redis` and expose the Celery task/config in `agentdrops/main.py`**
 
-- [ ] **Step 2: Delete `api/sessions.py`**
+Add imports:
+```python
+from redis.asyncio import Redis
+from agentdrops.worker.celery_app import configure_celery
+```
 
-Run: `git rm backend/src/agentdrops/api/sessions.py`
-
-- [ ] **Step 3: Rewrite `api/main.py`**
-
-Replace the full contents of `backend/src/agentdrops/api/main.py`:
+In the lifespan (inside the same `try` block that now builds `checkpointer`/`graph`/`sessions`), add, right after `configure_observability`:
 
 ```python
-"""FastAPI app exposing the market-research agent over /chat and /chat/stream.
+    configure_celery(settings)
+```
 
-Both endpoints enqueue a Celery task (`agentdrops.worker.tasks.run_turn_task`) and return
-immediately — this process never calls `graph.astream` itself. Job status/report/sources live in
-Redis (`agentdrops.jobs.store.JobStore`), written by the worker as it runs; `/chat/stream` relays
-the worker's published events (`agentdrops.jobs.events`) as SSE, in the same wire format clients
-already parse.
+And construct/close a Redis client alongside the engine:
+
+```python
+    try:
+        engine = create_engine(settings)
+        redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            async with (
+                httpx.AsyncClient(timeout=30.0) as client,
+                checkpointer(settings) as saver,
+            ):
+                session_factory = create_session_factory(engine)
+                graph = build_market_researcher(settings, client, saver)
+                sessions = SessionStore(session_factory)
+                audit = AuditLog(session_factory)
+                app.state.engine = engine
+                app.state.redis = redis
+                app.state.sessions = sessions
+                app.state.audit = audit
+                app.state.chat_service = ChatService(graph, sessions, audit)
+                app.state.research_service = ResearchService(graph, sessions)
+                app.state.sessions_service = SessionsService(sessions)
+                yield
+        finally:
+            await redis.aclose()
+            await engine.dispose()
+    finally:
+        providers.shutdown()
+```
+
+- [ ] **Step 3: Rewrite `api/v1/chat.py`**
+
+Replace the full contents of `backend/src/agentdrops/api/v1/chat.py`:
+
+```python
+"""Chat endpoints: enqueue one research turn, either acknowledged immediately or observed live
+via SSE. Execution itself happens in a Celery worker (`agentdrops.worker.tasks.run_turn_task`) —
+see `agentdrops/worker/runner.py` for the worker-side counterpart of what this module used to do
+directly through `ChatService.run_turn`.
 """
 
 import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Request, status
+from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 
-from agentdrops.api.schema import (
-    ChatQueuedResponse,
-    ChatRequest,
-    ReportResponse,
-    ResearchStatusResponse,
-    SessionsResponse,
-    SessionSummary,
-)
-from agentdrops.config import get_settings
+from agentdrops.api.v1.schema import ChatQueuedResponse, ChatRequest
+from agentdrops.config.constants import CHAT_TITLE_MAX_LENGTH
 from agentdrops.jobs.events import subscribe_events
-from agentdrops.jobs.store import JobRecord, JobStore
-from agentdrops.observability.setup import configure_observability, instrument_fastapi
-from agentdrops.types.error_codes import Error, NotFoundError, fastAPIErrorResponseModels
-from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
-from agentdrops.worker.celery_app import configure_celery
+from agentdrops.repository.sessions import SessionRecord, SessionStore
+from agentdrops.types.response import SuccessResponse
 from agentdrops.worker.tasks import run_turn_task
 
 logger = logging.getLogger(__name__)
 
-TITLE_MAX_LENGTH = 80
+router = APIRouter(tags=["chat"])
 
 _TERMINAL_STATUSES = {"done", "clarifying", "failed"}
 _TERMINAL_EVENT_TYPES = {"clarify", "done", "error"}
@@ -1219,96 +1443,44 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _terminal_event_from_job(thread_id: str, job: JobRecord) -> dict[str, Any]:
-    """Reconstruct the terminal SSE event from a job record already settled by the time
+def _terminal_event_from_session(thread_id: str, session: SessionRecord) -> dict[str, Any] | None:
+    """Reconstruct the terminal SSE event from a session record already settled by the time
     `/chat/stream` subscribes — the race window between enqueueing and subscribing."""
-    if job["status"] == "done":
-        return {"type": "done", "thread_id": thread_id, "report": job["report"]}
-    if job["status"] == "clarifying":
+    if session.status == "done":
+        return {"type": "done", "thread_id": thread_id, "report": session.report}
+    if session.status == "clarifying":
         return {
             "type": "clarify",
             "thread_id": thread_id,
-            "response": job["clarify_question"] or "",
+            "response": session.clarify_question or "",
         }
-    return {"type": "error", "thread_id": thread_id, "message": job["error"] or "Research failed"}
+    if session.status == "failed":
+        return {"type": "error", "thread_id": thread_id, "message": session.error or "Research failed"}
+    return None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_settings()
-    providers = configure_observability(settings)
-    configure_celery(settings)
-    redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        app.state.redis = redis
-        app.state.jobs = JobStore(redis)
-        yield
-    finally:
-        await redis.aclose()
-        providers.shutdown()
-
-
-app = FastAPI(title="Agentdrops Market Research Agent", lifespan=lifespan)
-instrument_fastapi(app)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+@router.post(
+    "/chat",
+    response_model=SuccessResponse[ChatQueuedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Enqueue a chat turn",
 )
-
-
-def _error_content(error: Error) -> dict[str, Any]:
-    return Response[Error](success=False, data=error).model_dump()
-
-
-@app.exception_handler(ErrorResponse)
-async def handle_error_response(_request: Request, exc: ErrorResponse) -> JSONResponse:
-    return JSONResponse(status_code=exc.error.code, content=_error_content(exc.error))
-
-
-@app.exception_handler(HTTPException)
-async def handle_http_exception(_request: Request, exc: HTTPException) -> JSONResponse:
-    error = Error(code=exc.status_code, description=str(exc.detail))
-    return JSONResponse(status_code=exc.status_code, content=_error_content(error))
-
-
-@app.exception_handler(RequestValidationError)
-async def handle_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
-    error = Error(
-        code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        description="Validation Error",
-        message=str(exc.errors()),
-    )
-    return JSONResponse(status_code=error.code, content=_error_content(error))
-
-
-@app.exception_handler(Exception)
-async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("unhandled error while processing %s %s", request.method, request.url.path)
-    error = Error(code=500, description="Internal Server Error")
-    return JSONResponse(status_code=error.code, content=_error_content(error))
-
-
-@app.get("/health", response_model=SuccessResponse[dict[str, str]])
-async def health() -> SuccessResponse[dict[str, str]]:
-    return SuccessResponse(data={"status": "ok"})
-
-
-@app.post("/chat", response_model=SuccessResponse[ChatQueuedResponse])
-async def chat(request: ChatRequest) -> SuccessResponse[ChatQueuedResponse]:
-    """Enqueue one chat turn for background execution; poll /research/{thread_id} for the
+async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueuedResponse]:
+    """Enqueue one chat turn for background execution; poll GET /research/{thread_id} for the
     result, or use /chat/stream instead to observe it live."""
-    thread_id = request.thread_id or str(uuid.uuid4())
-    jobs: JobStore = app.state.jobs
-    await jobs.touch(thread_id, title=request.message[:TITLE_MAX_LENGTH])
-    run_turn_task.delay(thread_id, request.message)
+    thread_id = body.thread_id or str(uuid.uuid4())
+    sessions: SessionStore = request.app.state.sessions
+    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
+    run_turn_task.delay(thread_id, body.message, "chat")
     return SuccessResponse(data=ChatQueuedResponse(thread_id=thread_id))
 
 
-@app.post("/chat/stream")
-async def chat_stream(request: ChatRequest) -> StreamingResponse:
+@router.post(
+    "/chat/stream",
+    status_code=status.HTTP_200_OK,
+    summary="Advance a chat turn, streamed via SSE",
+)
+async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     """Enqueue one chat turn, then stream its progress/source events as the worker runs it, via
     SSE — event shapes unchanged from before this turn ran in a background worker:
 
@@ -1320,19 +1492,21 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     - `{"type": "done", "thread_id": str, "report": str}` — terminal: the final report is ready.
     - `{"type": "error", "thread_id": str, "message": str}` — terminal: the run failed.
     """
-    thread_id = request.thread_id or str(uuid.uuid4())
-    jobs: JobStore = app.state.jobs
-    redis: Redis = app.state.redis
-    await jobs.touch(thread_id, title=request.message[:TITLE_MAX_LENGTH])
-    run_turn_task.delay(thread_id, request.message)
+    thread_id = body.thread_id or str(uuid.uuid4())
+    sessions: SessionStore = request.app.state.sessions
+    redis: Redis = request.app.state.redis
+    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
+    run_turn_task.delay(thread_id, body.message, "chat_stream")
 
     async def events() -> AsyncIterator[str]:
         # The task may have already finished by the time we get here (enqueue-then-subscribe
-        # race) — check the job record first rather than subscribing blind and hanging forever.
-        job = await jobs.get(thread_id)
-        if job is not None and job["status"] in _TERMINAL_STATUSES:
-            yield _sse(_terminal_event_from_job(thread_id, job))
-            return
+        # race) — check the session record first rather than subscribing blind and hanging.
+        session = await sessions.get(thread_id)
+        if session is not None and session.status in _TERMINAL_STATUSES:
+            terminal = _terminal_event_from_session(thread_id, session)
+            if terminal is not None:
+                yield _sse(terminal)
+                return
         try:
             async for event in subscribe_events(redis, thread_id):
                 yield _sse(event)
@@ -1345,101 +1519,42 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
 
     return StreamingResponse(events(), media_type="text/event-stream")
-
-
-@app.get("/research/sessions", response_model=SuccessResponse[SessionsResponse])
-async def list_sessions() -> SuccessResponse[SessionsResponse]:
-    """List every known research thread, most recently started first, for the sidebar."""
-    jobs: JobStore = app.state.jobs
-    records = await jobs.list_recent()
-    return SuccessResponse(
-        data=SessionsResponse(
-            sessions=[
-                SessionSummary(
-                    id=r["thread_id"],
-                    title=r["title"],
-                    created_at=r["created_at"],
-                    status=r["status"],
-                )
-                for r in records
-            ]
-        )
-    )
-
-
-@app.get(
-    "/research/{thread_id}",
-    response_model=SuccessResponse[ResearchStatusResponse],
-    responses={status.HTTP_404_NOT_FOUND: fastAPIErrorResponseModels[status.HTTP_404_NOT_FOUND]},
-)
-async def get_research_status(thread_id: str) -> SuccessResponse[ResearchStatusResponse]:
-    """Read one thread's current status straight off its Redis job record."""
-    jobs: JobStore = app.state.jobs
-    job = await jobs.get(thread_id)
-    if job is None:
-        raise ErrorResponse(NotFoundError(message="Unknown thread_id"))
-    return SuccessResponse(
-        data=ResearchStatusResponse(thread_id=thread_id, status=job["status"], report=job["report"])
-    )
-
-
-@app.get(
-    "/research/{thread_id}/report",
-    response_model=SuccessResponse[ReportResponse],
-    responses={status.HTTP_404_NOT_FOUND: fastAPIErrorResponseModels[status.HTTP_404_NOT_FOUND]},
-)
-async def get_research_report(thread_id: str) -> SuccessResponse[ReportResponse]:
-    """Fetch a completed thread's report and sources, so the drawer can reopen without a rerun."""
-    jobs: JobStore = app.state.jobs
-    job = await jobs.get(thread_id)
-    if job is None or job["report"] is None:
-        raise ErrorResponse(NotFoundError(message="Report not available for this thread_id"))
-    return SuccessResponse(
-        data=ReportResponse(thread_id=thread_id, report=job["report"], sources=job["sources"])
-    )
 ```
 
-- [ ] **Step 4: Rewrite `tests/unit/api/test_main.py`**
+- [ ] **Step 4: Update `tests/unit/api/v1/conftest.py`'s `client`/`failing_client` fixtures**
 
-Replace the full contents of `backend/tests/unit/api/test_main.py`:
+The fixtures currently patch `main_module.build_market_researcher` and the DB layer (Task 3 already added the `checkpointer` patch). Now also patch `run_turn_task.delay` and the `Redis.from_url` construction so `/chat`/`/chat/stream` never touch a real broker, and share one `FakeRedis`/`FakeServer` so a test can simulate "the worker" publishing events the same way `tests/unit/worker/test_runner.py` does directly.
 
+Add imports:
 ```python
-import asyncio
-import json
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
-
-import pytest
 from fakeredis import FakeServer
 from fakeredis.aioredis import FakeRedis
-from fastapi.testclient import TestClient
+```
 
-import agentdrops.api.main as main_module
-from agentdrops.jobs.store import JobStore
-from tests.unit.agents.conftest import make_settings
-
-
+Add near the top of the fixture section:
+```python
 class _FakeDelay:
-    """Stand-in for Celery's `.delay(...)`: records calls instead of touching a real broker.
-    A worker publishing events is simulated separately per-test via `publish_event`/`JobStore`
-    against the same `FakeServer`, exactly like a real worker would from its own process."""
+    """Stand-in for Celery's `.delay(...)`: records calls instead of touching a real broker."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
 
-    def __call__(self, thread_id: str, message: str) -> None:
-        self.calls.append((thread_id, message))
+    def __call__(self, thread_id: str, message: str, operation: str) -> None:
+        self.calls.append((thread_id, message, operation))
+```
 
+Change the `client` fixture (and mirror the same additions in `failing_client`):
 
+```python
 @pytest.fixture
-def shared_server() -> FakeServer:
-    return FakeServer()
-
-
-@pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, shared_server: FakeServer) -> Iterator[TestClient]:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
     monkeypatch.setattr(main_module, "configure_celery", lambda settings: None)
+    monkeypatch.setattr(
+        main_module, "build_market_researcher", lambda settings, client, checkpointer: _FakeGraph()
+    )
+    _patch_db(monkeypatch)
+    shared_server = FakeServer()
     monkeypatch.setattr(
         main_module.Redis,
         "from_url",
@@ -1449,81 +1564,50 @@ def client(monkeypatch: pytest.MonkeyPatch, shared_server: FakeServer) -> Iterat
     monkeypatch.setattr(main_module.run_turn_task, "delay", fake_delay)
     with TestClient(main_module.app) as test_client:
         test_client.fake_delay = fake_delay  # type: ignore[attr-defined]
-        test_client.worker_redis = FakeRedis(  # type: ignore[attr-defined]
-            server=shared_server, decode_responses=True
-        )
         yield test_client
+```
 
+(`main_module.run_turn_task` — `run_turn_task` is imported into `api/v1/chat.py`, not `main.py`; monkeypatch it via `agentdrops.api.v1.chat.run_turn_task` instead. Import `agentdrops.api.v1.chat as chat_module` at the top of `conftest.py` and patch `chat_module.run_turn_task.delay` there. Likewise `Redis` is used both in `main.py` — for `app.state.redis` — and in `api/v1/chat.py` only as a type annotation, so patching `main_module.Redis.from_url` is sufficient since it's the same class object regardless of which module imported it.)
 
-def _parse_sse(raw_text: str) -> list[dict[str, Any]]:
-    return [json.loads(line[len("data: ") :]) for line in raw_text.splitlines() if line]
+- [ ] **Step 5: Update `tests/unit/api/v1/test_chat.py`**
 
+The existing tests assert on the *old*, synchronous behavior (full report/clarify text returned immediately from `/chat`, and `/chat/stream`'s SSE body containing the whole turn's events in one response). Both assumptions are now wrong: `/chat` returns `{"status": "queued"}` immediately, and `/chat/stream`'s events only arrive if something (the "worker", simulated in tests) publishes them or the session is already terminal.
 
-def test_health(client: TestClient) -> None:
-    response = client.get("/health")
+Replace `test_chat_first_turn_asks_for_clarification` and `test_chat_follow_up_returns_final_report`:
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-
-
+```python
 def test_chat_enqueues_and_returns_queued_immediately(client: TestClient) -> None:
-    response = client.post("/chat", json={"message": "Research the EV charging market"})
+    response = client.post("/v1/chat", json={"message": "Research the EV charging market"})
 
     assert response.status_code == 200
     body = response.json()["data"]
     assert body["status"] == "queued"
     thread_id = body["thread_id"]
-    assert client.fake_delay.calls == [(thread_id, "Research the EV charging market")]  # type: ignore[attr-defined]
+    assert client.fake_delay.calls == [  # type: ignore[attr-defined]
+        (thread_id, "Research the EV charging market", "chat")
+    ]
 
-    status_response = client.get(f"/research/{thread_id}")
+    status_response = client.get(f"/v1/research/{thread_id}")
     assert status_response.json()["data"]["status"] == "queued"
+```
 
+Replace `test_chat_stream_first_turn_emits_clarify_event` and `test_chat_stream_second_turn_emits_progress_source_and_done` — these depended on the fake graph actually running inline, which no longer happens. Use the session-record race-reconstruction path instead (already covered end-to-end by `run_turn`'s own tests in `tests/unit/worker/test_runner.py`; these tests are about the *endpoint's* race handling, not `ChatService`'s node-mapping):
 
-# NOTE: the "worker publishes while /chat/stream is subscribed" path is covered by
-# `tests/unit/jobs/test_events.py` (pub/sub round-trip) and the `_terminal_event_from_job` tests
-# below (the race where the worker finishes first) — a live concurrent-timing test through
-# TestClient's synchronous streaming API would be flaky by construction, so it's intentionally
-# not written here.
-
-
-def test_chat_stream_reconstructs_terminal_event_if_already_done(client: TestClient) -> None:
-    """The enqueue-then-subscribe race: by the time /chat/stream subscribes, the task has
-    already finished (e.g. a fast clarify-only turn). It must not hang waiting on pub/sub."""
-    jobs = JobStore(client.worker_redis)  # type: ignore[attr-defined]
-
-    async def _seed() -> str:
-        record = await jobs.touch("t-done", title="Research the EV charging market")
-        await jobs.set_status("t-done", "done", report="# EV Charging Market Report")
-        return record["thread_id"]
-
-    asyncio.run(_seed())
-
-    response = client.post(
-        "/chat/stream", json={"thread_id": "t-done", "message": "Focus on the EU"}
-    )
-
-    events = _parse_sse(response.text)
-    assert events == [{"type": "done", "thread_id": "t-done", "report": "# EV Charging Market Report"}]
-
-
-def test_chat_stream_reconstructs_clarify_event_if_already_clarifying(
+```python
+async def test_chat_stream_reconstructs_clarify_event_if_already_clarifying(
     client: TestClient,
 ) -> None:
-    jobs = JobStore(client.worker_redis)  # type: ignore[attr-defined]
-
-    async def _seed() -> None:
-        await jobs.touch("t-clarify", title="Research the EV charging market")
-        await jobs.set_status(
-            "t-clarify", "clarifying", clarify_question="Which region should I focus on?"
-        )
-
-    asyncio.run(_seed())
-
-    response = client.post(
-        "/chat/stream", json={"thread_id": "t-clarify", "message": "Research the EV market"}
+    sessions = client.app.state.sessions
+    await sessions.touch("t-clarify", title="Research the EV charging market")
+    await sessions.set_status(
+        "t-clarify", "clarifying", clarify_question="Which region should I focus on?"
     )
 
-    events = _parse_sse(response.text)
+    response = client.post(
+        "/v1/chat/stream", json={"thread_id": "t-clarify", "message": "Research the EV market"}
+    )
+
+    events = parse_sse(response.text)
     assert events == [
         {
             "type": "clarify",
@@ -1533,88 +1617,59 @@ def test_chat_stream_reconstructs_clarify_event_if_already_clarifying(
     ]
 
 
-def test_chat_stream_reconstructs_error_event_if_already_failed(client: TestClient) -> None:
-    jobs = JobStore(client.worker_redis)  # type: ignore[attr-defined]
-
-    async def _seed() -> None:
-        await jobs.touch("t-failed", title="Research the EV charging market")
-        await jobs.set_status("t-failed", "failed", error="LLM provider unavailable")
-
-    asyncio.run(_seed())
+async def test_chat_stream_reconstructs_done_event_if_already_done(client: TestClient) -> None:
+    sessions = client.app.state.sessions
+    await sessions.touch("t-done", title="Research the EV charging market")
+    await sessions.set_status("t-done", "done", report="# EV Charging Market Report")
 
     response = client.post(
-        "/chat/stream", json={"thread_id": "t-failed", "message": "Research the EV market"}
+        "/v1/chat/stream", json={"thread_id": "t-done", "message": "Focus on the EU"}
     )
 
-    events = _parse_sse(response.text)
+    events = parse_sse(response.text)
     assert events == [
-        {"type": "error", "thread_id": "t-failed", "message": "LLM provider unavailable"}
+        {"type": "done", "thread_id": "t-done", "report": "# EV Charging Market Report"}
     ]
 
 
-def test_list_sessions_returns_known_threads_newest_first(client: TestClient) -> None:
-    client.post("/chat", json={"message": "Research the EV charging market"})
-    client.post("/chat", json={"message": "Research the fintech market"})
+async def test_chat_stream_reconstructs_error_event_if_already_failed(client: TestClient) -> None:
+    sessions = client.app.state.sessions
+    await sessions.touch("t-failed", title="Research the EV charging market")
+    await sessions.set_status("t-failed", "failed", error="LLM provider unavailable")
 
-    response = client.get("/research/sessions")
+    response = client.post(
+        "/v1/chat/stream", json={"thread_id": "t-failed", "message": "Research the EV market"}
+    )
 
-    assert response.status_code == 200
-    titles = [s["title"] for s in response.json()["data"]["sessions"]]
-    assert titles == ["Research the fintech market", "Research the EV charging market"]
-    assert all(s["status"] == "queued" for s in response.json()["data"]["sessions"])
+    events = parse_sse(response.text)
+    assert events == [
+        {"type": "error", "thread_id": "t-failed", "message": "LLM provider unavailable"}
+    ]
+```
 
+Replace `test_chat_persists_sources_same_as_chat_stream` (it drove the graph inline via two `/chat` calls — no longer possible) with a direct assertion against the fake session store, since sources are now only ever written by the worker (already covered by `tests/unit/worker/test_runner.py`) — drop this test; note in the commit message that its coverage moved to the worker test.
 
-def test_get_research_status_unknown_thread_returns_404(client: TestClient) -> None:
-    response = client.get("/research/does-not-exist")
+Replace `test_chat_returns_502_and_marks_session_failed_on_graph_error` and `test_chat_stream_emits_error_event_and_marks_session_failed` — `/chat`/`/chat/stream` no longer call `ChatService.run_turn` directly, so they can't fail from a graph error anymore (that happens in the worker, covered by `tests/unit/worker/test_runner.py::test_run_turn_records_failure_and_publishes_error_on_exception`). Replace both with the new subscription-failure test:
 
-    assert response.status_code == 404
-
-
-def test_get_research_report_before_done_returns_404(client: TestClient) -> None:
-    first = client.post("/chat", json={"message": "Research the EV charging market"})
-    thread_id = first.json()["data"]["thread_id"]
-
-    response = client.get(f"/research/{thread_id}/report")
-
-    assert response.status_code == 404
-
-
-def test_get_research_report_after_done_returns_report_and_sources(client: TestClient) -> None:
-    jobs = JobStore(client.worker_redis)  # type: ignore[attr-defined]
-
-    async def _seed() -> str:
-        record = await jobs.touch("t-report", title="Research the EV charging market")
-        await jobs.add_source("t-report", "EU", "EU findings")
-        await jobs.set_status("t-report", "done", report="# EV Charging Market Report")
-        return record["thread_id"]
-
-    thread_id = asyncio.run(_seed())
-
-    response = client.get(f"/research/{thread_id}/report")
-
-    assert response.status_code == 200
-    body = response.json()["data"]
-    assert body["report"] == "# EV Charging Market Report"
-    assert body["sources"] == [{"topic": "EU", "summary": "EU findings"}]
-
-
-def test_chat_stream_emits_error_event_if_subscription_fails(
+```python
+async def test_chat_stream_emits_error_event_if_subscription_fails(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A dropped Redis connection mid-subscribe must surface as an `error` SSE event, not hang
     the response open with nothing ever arriving."""
+    import agentdrops.api.v1.chat as chat_module
 
     async def _broken_subscribe(_redis: Any, _thread_id: str) -> AsyncIterator[dict[str, Any]]:
         raise ConnectionError("connection to Redis lost")
         yield {}  # pragma: no cover — makes this an async generator; never reached
 
-    monkeypatch.setattr(main_module, "subscribe_events", _broken_subscribe)
+    monkeypatch.setattr(chat_module, "subscribe_events", _broken_subscribe)
 
     response = client.post(
-        "/chat/stream", json={"message": "Research the EV charging market"}
+        "/v1/chat/stream", json={"message": "Research the EV charging market"}
     )
 
-    events = _parse_sse(response.text)
+    events = parse_sse(response.text)
     assert events == [
         {
             "type": "error",
@@ -1624,22 +1679,35 @@ def test_chat_stream_emits_error_event_if_subscription_fails(
     ]
 ```
 
-- [ ] **Step 5: Run the tests**
+Add the necessary imports at the top of `test_chat.py`:
+```python
+from collections.abc import AsyncIterator
+from typing import Any
 
-Run: `pytest tests/unit/api/test_main.py -v`
-Expected: PASS (10 tests).
+import pytest
+```
 
-- [ ] **Step 6: Run the full suite, lint, and typecheck**
+Remove the `failing_client` fixture's usages from this file entirely (no test needs it anymore — the fixture itself can stay in `conftest.py` unused for now, or be removed if nothing else references it; check `test_research.py`/`test_sessions.py` before deleting it).
+
+- [ ] **Step 6: Run the tests**
+
+Run: `pytest tests/unit/api/v1/test_chat.py -v`
+Expected: PASS.
+
+- [ ] **Step 7: Run the full suite, lint, and typecheck**
 
 Run: `pytest && ruff check . && mypy src`
 Expected: all three PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add backend/src/agentdrops/api/schema.py backend/src/agentdrops/api/main.py backend/tests/unit/api/test_main.py
-git rm backend/src/agentdrops/api/sessions.py
-git commit -m "feat(backend): make /chat and /chat/stream enqueue Celery tasks instead of driving the graph inline"
+git add backend/src/agentdrops/api/v1/schema.py \
+        backend/src/agentdrops/api/v1/chat.py \
+        backend/src/agentdrops/main.py \
+        backend/tests/unit/api/v1/conftest.py \
+        backend/tests/unit/api/v1/test_chat.py
+git commit -m "feat(backend): make /chat and /chat/stream enqueue Celery tasks instead of running inline"
 ```
 
 ---
@@ -1653,7 +1721,7 @@ git commit -m "feat(backend): make /chat and /chat/stream enqueue Celery tasks i
 - Consumes: `agentdrops.worker.app:celery_app` (Task 7).
 - Produces: `make worker` target, following the same shape as the existing `make run` target.
 
-This repo runs the API by invoking `uvicorn` directly via `make run` — there's no Dockerfile or app-level `docker-compose.yml` service (compose only runs infra: postgres/redis/minio). A worker gets the same treatment: a Makefile target, not new container infrastructure the rest of the repo doesn't have yet.
+This repo runs the API by invoking `uvicorn` directly via `make run` — there's no Dockerfile or app-level `docker-compose.yml` service (compose only runs infra: postgres/redis/minio). A worker gets the same treatment: a Makefile target, not new container infrastructure.
 
 - [ ] **Step 1: Add the `worker` target**
 
@@ -1670,17 +1738,17 @@ worker: infra-up ## Start a Celery worker processing background research turns
 		|| ($(call log_err,worker exited non-zero); exit 1)
 ```
 
-And register it in the `.PHONY` line (already listing `run dev stop ...`):
+Update the `.PHONY` line:
 
 ```makefile
 .PHONY: help venv install env infra-up infra-down infra-restart infra-ps infra-logs infra-reset \
         run dev worker stop test test-file lint lint-fix format typecheck check clean doctor
 ```
 
-- [ ] **Step 2: Verify the target resolves correctly (dry run, no real .env needed for this check)**
+- [ ] **Step 2: Verify the target resolves correctly**
 
 Run: `cd backend && make -n worker`
-Expected: prints the `celery -A agentdrops.worker.app worker --loglevel=info` command line (not run, since `-n` is dry-run) with no Makefile syntax errors.
+Expected: prints the `celery -A agentdrops.worker.app worker --loglevel=info` command line (dry-run, not executed) with no Makefile syntax errors.
 
 - [ ] **Step 3: Commit**
 
@@ -1691,22 +1759,21 @@ git commit -m "chore(backend): add make worker target for the Celery worker proc
 
 ---
 
-### Task 10: Mirror the API contract change in the frontend
+### Task 10: Mirror the `queued` status in the frontend
 
 **Files:**
 - Modify: `frontend/src/lib/types.ts`
-- Modify: `frontend/src/lib/api.ts:60-61` (docstring only)
-- Modify: `frontend/src/app/page.tsx:135-137`
+- Modify: `frontend/src/app/page.tsx`
 
 **Interfaces:**
-- Consumes: `ResearchStatusResponse`'s new `status` values (`"queued"` added) and dropped `research_brief` field (Task 8).
-- Produces: `ResearchStatusValue` gains `"queued"`; `ResearchStatus` type drops `research_brief`; `selectSession`'s live-status check treats `"queued"` as a still-in-flight status, same as `"clarifying"`/`"running"`.
+- Consumes: `ResearchStatusResponse`/`SessionSummary`'s widened `status` (Task 2 added `"queued"`).
+- Produces: `ResearchStatusValue` gains `"queued"`; `selectSession`'s live-status check treats `"queued"` as still in-flight, same as `"clarifying"`/`"running"`.
 
-Per `CLAUDE.md`: "SSE event shapes are documented on `chat_stream` and mirrored in `frontend/src/lib/types.ts` — change both together." `research_brief` is declared in `ResearchStatus` (`types.ts:36`) but never read anywhere in `page.tsx`/`api.ts` (confirmed via grep) — safe to delete outright rather than leave a field that's now permanently `null`.
+`research_brief` stays in the schema and in `frontend/src/lib/types.ts` — unlike the original (pre-reconciliation) draft of this plan, `ResearchService.get_status` still reads it from the LangGraph checkpoint (`research_service.py:42`), and that checkpoint is now Postgres-backed and shared across processes (Task 3), so it keeps working unchanged.
 
 - [ ] **Step 1: Update `types.ts`**
 
-In `frontend/src/lib/types.ts`, change:
+Change:
 
 ```typescript
 export type ResearchStatusValue = "clarifying" | "running" | "done" | "failed";
@@ -1718,44 +1785,9 @@ to:
 export type ResearchStatusValue = "queued" | "clarifying" | "running" | "done" | "failed";
 ```
 
-And change:
+- [ ] **Step 2: Treat `"queued"` as still-in-flight in `selectSession`**
 
-```typescript
-export type ResearchStatus = {
-  thread_id: string;
-  status: ResearchStatusValue;
-  research_brief: string | null;
-  report: string | null;
-};
-```
-
-to:
-
-```typescript
-export type ResearchStatus = {
-  thread_id: string;
-  status: ResearchStatusValue;
-  report: string | null;
-};
-```
-
-- [ ] **Step 2: Update `api.ts`'s stale docstring**
-
-In `frontend/src/lib/api.ts:60`, change:
-
-```typescript
-/** Read one thread's current status straight off the graph's checkpoint. */
-```
-
-to:
-
-```typescript
-/** Read one thread's current status straight off its Redis job record. */
-```
-
-- [ ] **Step 3: Treat `"queued"` as still-in-flight in `selectSession`**
-
-In `frontend/src/app/page.tsx:135-137`, change:
+In `frontend/src/app/page.tsx`, find the block in `selectSession` that reads:
 
 ```typescript
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
@@ -1764,7 +1796,7 @@ In `frontend/src/app/page.tsx:135-137`, change:
       }
 ```
 
-to:
+Change to:
 
 ```typescript
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
@@ -1777,32 +1809,33 @@ to:
       }
 ```
 
-(`pollUntilSettled` itself, at `page.tsx:79-94`, already keeps polling by default for anything other than `"done"`/`"failed"` — only `selectSession`'s initial branch needed the new value added.)
+(`pollUntilSettled` itself already keeps polling by default for anything other than `"done"`/`"failed"` — only `selectSession`'s initial branch needed the new value added.)
 
-- [ ] **Step 4: Typecheck and lint the frontend**
+- [ ] **Step 3: Typecheck and lint the frontend**
 
 Run: `cd frontend && npm run lint`
-Expected: PASS, no unused-import or type errors.
+Expected: PASS.
 
 Run: `npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add frontend/src/lib/types.ts frontend/src/lib/api.ts frontend/src/app/page.tsx
-git commit -m "fix(frontend): mirror the queued status and dropped research_brief field"
+git add frontend/src/lib/types.ts frontend/src/app/page.tsx
+git commit -m "fix(frontend): treat queued sessions as still in-flight when reopened"
 ```
 
 ---
 
 ## Manual Verification (not automated — requires real Postgres/Redis)
 
-After all tasks land, the unit-test suite proves the wiring is correct in isolation, but the following needs a human running `docker compose up -d` plus both processes:
+After all tasks land, the unit-test suite proves the wiring is correct in isolation, but the following needs a human running `docker compose up -d`, `alembic upgrade head`, and both processes:
 
 1. `make env` (if `.env` doesn't exist yet), fill in real API keys.
 2. `make infra-up` (postgres/redis/minio).
-3. Terminal A: `make run` (FastAPI on :8001).
-4. Terminal B: `make worker` (Celery worker).
-5. From the frontend (`npm run dev`), submit a research topic and confirm: progress steps stream live, a clarifying question round-trips correctly, the final report renders, and reopening a session from the sidebar mid-run resumes via polling.
-6. Restart the worker process mid-run (kill `make worker`, restart it) and confirm a *new* turn on the same thread still works — this is the check that Postgres checkpoint state actually survived a worker-process restart, which `InMemorySaver` never could.
+3. `cd backend && alembic upgrade head` (applies migration `0002`).
+4. Terminal A: `make run` (FastAPI on :8001).
+5. Terminal B: `make worker` (Celery worker).
+6. From the frontend (`npm run dev`), submit a research topic and confirm: the sidebar shows "queued" briefly, progress steps stream live once the worker picks it up, a clarifying question round-trips correctly, the final report renders, and reopening a session from the sidebar mid-run resumes via polling.
+7. Restart the worker process mid-run (kill `make worker`, restart it) and confirm a *new* turn on the same thread still works — this is the check that the Postgres checkpoint actually survived a worker-process restart, which `InMemorySaver` never could.
