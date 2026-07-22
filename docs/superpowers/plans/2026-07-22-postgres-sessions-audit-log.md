@@ -772,10 +772,10 @@ In `backend/src/agentdrops/main.py`, replace:
 
 ```python
 from agentdrops.agents.graph import build_market_researcher
-from agentdrops.api.sessions import SessionStore
 from agentdrops.api.v1 import router as v1_router
 from agentdrops.config import get_settings
 from agentdrops.observability.setup import configure_observability, instrument_fastapi
+from agentdrops.repository.sessions import SessionStore
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
 ```
@@ -1051,45 +1051,19 @@ git commit -m "feat: await Postgres sessions and record audit log in chat routes
 
 ---
 
-### Task 8: Await sessions in `api/v1/research.py`
+### Task 8: Await sessions in `api/v1/sessions.py` and `api/v1/research.py`
+
+Session-listing now lives in its own route module (`api/v1/sessions.py`), separate from
+`api/v1/research.py`'s status/report routes — both still just read `request.app.state.sessions`.
 
 **Files:**
+- Modify: `backend/src/agentdrops/api/v1/sessions.py`
 - Modify: `backend/src/agentdrops/api/v1/research.py`
 
 **Interfaces:**
 - Consumes: `SessionStore` (now async, Task 4).
 
-- [ ] **Step 1: Fix the import block**
-
-At the top of `backend/src/agentdrops/api/v1/research.py`, replace:
-
-```python
-from agentdrops.api.sessions import SessionStore
-from agentdrops.api.v1.schema import (
-    ReportResponse,
-    ResearchStatusResponse,
-    SessionsResponse,
-    SessionSummary,
-)
-from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
-from agentdrops.types.response import ErrorResponse, SuccessResponse
-```
-
-with (alphabetical — `repository.sessions` sorts after `api.v1.schema`, before `types.*`):
-
-```python
-from agentdrops.api.v1.schema import (
-    ReportResponse,
-    ResearchStatusResponse,
-    SessionsResponse,
-    SessionSummary,
-)
-from agentdrops.repository.sessions import SessionStore
-from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
-from agentdrops.types.response import ErrorResponse, SuccessResponse
-```
-
-- [ ] **Step 2: Await `sessions.list_recent()` in `list_sessions`**
+- [ ] **Step 1: Await `sessions.list_recent()` in `api/v1/sessions.py`**
 
 Change:
 
@@ -1134,7 +1108,7 @@ async def list_sessions(request: Request) -> SuccessResponse[SessionsResponse]:
     )
 ```
 
-- [ ] **Step 3: Await `sessions.get()` in `get_research_status`**
+- [ ] **Step 2: Await `sessions.get()` in `api/v1/research.py`'s `get_research_status`**
 
 Change:
 
@@ -1152,7 +1126,7 @@ to:
     if session is not None and session.status == "failed":
 ```
 
-- [ ] **Step 4: Await `sessions.get()` in `get_research_report`**
+- [ ] **Step 3: Await `sessions.get()` in `api/v1/research.py`'s `get_research_report`**
 
 Change:
 
@@ -1170,28 +1144,34 @@ to:
     if session is None or session.report is None:
 ```
 
-- [ ] **Step 5: Lint and type-check**
+- [ ] **Step 4: Lint and type-check**
 
-Run: `.venv/bin/ruff check src/agentdrops/api/v1/research.py && .venv/bin/mypy src/agentdrops/api/v1/research.py`
+Run: `.venv/bin/ruff check src/agentdrops/api/v1/sessions.py src/agentdrops/api/v1/research.py && .venv/bin/mypy src/agentdrops/api/v1/sessions.py src/agentdrops/api/v1/research.py`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/agentdrops/api/v1/research.py
-git commit -m "feat: await Postgres sessions in research routes"
+git add backend/src/agentdrops/api/v1/sessions.py backend/src/agentdrops/api/v1/research.py
+git commit -m "feat: await Postgres sessions in session-listing and research routes"
 ```
 
 ---
 
-### Task 9: Fake pool/sessions/audit in the route-level test fixtures
+### Task 9: Fake pool/sessions/audit in the test fixtures that build `TestClient(main_module.app)`
+
+Two separate test modules each build their own `TestClient(main_module.app)`, which now runs the
+real `lifespan` (Task 6) on every test — including `tests/unit/test_main.py`, which only exercises
+`/health` and error-envelope shaping but still pays for app startup. Both need the pool/session/
+audit fakes so none of them reach for a real Postgres.
 
 **Files:**
 - Modify: `backend/tests/unit/api/v1/conftest.py`
+- Modify: `backend/tests/unit/test_main.py`
 
 **Interfaces:**
 - Consumes: names `create_pool`, `SessionStore`, `AuditLog` as imported into `agentdrops.main` (Task 6) — monkeypatched by name, same pattern as the existing `build_market_researcher` patch.
-- Produces: `client` / `failing_client` fixtures that exercise `api/v1/chat.py` and `api/v1/research.py` against fakes, no real Postgres required. `tests/unit/api/v1/test_chat.py` and `test_research.py` are unchanged — they only talk to the app over HTTP.
+- Produces: `_FakePool`, `_fake_create_pool`, `_FakeSessionStore`, `_FakeAuditLog` in `tests/unit/api/v1/conftest.py`, reused (imported) from `tests/unit/test_main.py`. `client` / `failing_client` fixtures in `api/v1/conftest.py` and the `client` fixture in `test_main.py` all exercise the app against fakes, no real Postgres required. `tests/unit/api/v1/test_chat.py`, `test_research.py`, `test_sessions.py`, and `tests/unit/test_main.py`'s three tests are unchanged — they only talk to the app over HTTP.
 
 - [ ] **Step 1: Add fake pool/session/audit classes and patch the fixtures**
 
@@ -1307,26 +1287,65 @@ def failing_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         yield test_client
 ```
 
-- [ ] **Step 2: Run the full route test suite**
+- [ ] **Step 2: Patch `tests/unit/test_main.py`'s `client` fixture the same way**
 
-Run: `.venv/bin/pytest tests/unit/api/v1 -v`
-Expected: all tests in `test_chat.py` and `test_research.py` pass unchanged (they only assert on HTTP responses).
+In `backend/tests/unit/test_main.py`, add an import (after the existing `from tests.unit.agents.conftest import make_settings`, alphabetically — `agents.conftest` sorts before `api.v1.conftest`):
 
-- [ ] **Step 3: Run the entire backend test suite**
+```python
+import agentdrops.main as main_module
+from tests.unit.agents.conftest import make_settings
+from tests.unit.api.v1.conftest import _FakeAuditLog, _FakeSessionStore, _fake_create_pool
+```
+
+Change the `client` fixture:
+
+```python
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(
+        main_module, "build_market_researcher", lambda settings, client: _StubGraph()
+    )
+    with TestClient(main_module.app) as test_client:
+        yield test_client
+```
+
+to:
+
+```python
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(
+        main_module, "build_market_researcher", lambda settings, client: _StubGraph()
+    )
+    monkeypatch.setattr(main_module, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(main_module, "SessionStore", _FakeSessionStore)
+    monkeypatch.setattr(main_module, "AuditLog", _FakeAuditLog)
+    with TestClient(main_module.app) as test_client:
+        yield test_client
+```
+
+- [ ] **Step 3: Run the full route and main test suites**
+
+Run: `.venv/bin/pytest tests/unit/api/v1 tests/unit/test_main.py -v`
+Expected: all tests in `test_chat.py`, `test_research.py`, `test_sessions.py`, and `test_main.py` pass unchanged (they only assert on HTTP responses).
+
+- [ ] **Step 4: Run the entire backend test suite**
 
 Run: `.venv/bin/pytest`
 Expected: all tests pass; `tests/unit/repository/*` either pass (if Postgres is reachable) or skip.
 
-- [ ] **Step 4: Lint and type-check the whole tree**
+- [ ] **Step 5: Lint and type-check the whole tree**
 
 Run: `.venv/bin/ruff check . && .venv/bin/mypy src`
 Expected: no errors.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add backend/tests/unit/api/v1/conftest.py
-git commit -m "test: fake Postgres pool, sessions, and audit log in route tests"
+git add backend/tests/unit/api/v1/conftest.py backend/tests/unit/test_main.py
+git commit -m "test: fake Postgres pool, sessions, and audit log in app-level test fixtures"
 ```
 
 ---
