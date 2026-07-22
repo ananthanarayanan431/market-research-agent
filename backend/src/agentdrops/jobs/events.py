@@ -28,4 +28,4 @@ async def subscribe_events(redis: Redis, thread_id: str) -> AsyncIterator[dict[s
             yield json.loads(message["data"])
     finally:
         await pubsub.unsubscribe(_channel(thread_id))
-        await pubsub.aclose()
+        await pubsub.aclose()  # type: ignore[no-untyped-call]  # redis-py's aclose() lacks type annotations
