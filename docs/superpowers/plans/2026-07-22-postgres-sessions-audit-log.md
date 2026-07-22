@@ -298,10 +298,7 @@ else:
 - [ ] **Step 3: Write `script.py.mako`** (Alembic's standard template, needed for any future `alembic revision -m "..."`)
 
 ```mako
-<%!
-import re
-
-%>"""${message}
+"""${message}
 
 Revision ID: ${up_revision}
 Revises: ${down_revision | comma,n}
@@ -811,16 +808,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     providers = configure_observability(settings)
-    pool = await create_pool(settings)
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            app.state.graph = build_market_researcher(settings, client)
-            app.state.pool = pool
-            app.state.sessions = SessionStore(pool)
-            app.state.audit = AuditLog(pool)
-            yield
+        pool = await create_pool(settings)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                app.state.graph = build_market_researcher(settings, client)
+                app.state.pool = pool
+                app.state.sessions = SessionStore(pool)
+                app.state.audit = AuditLog(pool)
+                yield
+        finally:
+            await pool.close()
     finally:
-        await pool.close()
         providers.shutdown()
 ```
 
@@ -846,7 +845,32 @@ git commit -m "feat: wire Postgres pool, sessions, and audit log into app lifesp
 **Interfaces:**
 - Consumes: `SessionStore` (now async, Task 4), `AuditLog.record` (Task 5), `request.app.state.audit` (Task 6).
 
-- [ ] **Step 1: Await every `sessions.*` call inside `_run_graph_turn`**
+- [ ] **Step 1: Fix the import block**
+
+At the top of `backend/src/agentdrops/api/v1/chat.py`, replace:
+
+```python
+from agentdrops.api.sessions import SessionStore
+from agentdrops.api.v1.schema import ChatRequest, ChatResponse
+from agentdrops.observability.logging import bind_run_id
+from agentdrops.observability.tracing import traced_span
+from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
+from agentdrops.types.response import ErrorResponse, SuccessResponse
+```
+
+with (alphabetical — `repository.*` sorts after `observability.*`, before `types.*`):
+
+```python
+from agentdrops.api.v1.schema import ChatRequest, ChatResponse
+from agentdrops.observability.logging import bind_run_id
+from agentdrops.observability.tracing import traced_span
+from agentdrops.repository.audit import AuditLog
+from agentdrops.repository.sessions import SessionStore
+from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
+from agentdrops.types.response import ErrorResponse, SuccessResponse
+```
+
+- [ ] **Step 2: Await every `sessions.*` call inside `_run_graph_turn`**
 
 In `_run_graph_turn`, change:
 
@@ -910,7 +934,7 @@ to:
                         await sessions.set_status(thread_id, "running")
 ```
 
-- [ ] **Step 2: Await `sessions.touch` and add `audit.record` in `chat()`**
+- [ ] **Step 3: Await `sessions.touch` and add `audit.record` in `chat()`**
 
 Replace the body of `chat()`:
 
@@ -960,7 +984,7 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatRespo
     )
 ```
 
-- [ ] **Step 3: Await `sessions.touch` and add `audit.record` in `chat_stream()`**
+- [ ] **Step 4: Await `sessions.touch` and add `audit.record` in `chat_stream()`**
 
 Replace the body of `chat_stream()`:
 
@@ -1013,21 +1037,6 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     return StreamingResponse(events(), media_type="text/event-stream")
 ```
 
-- [ ] **Step 4: Add the `AuditLog` import**
-
-At the top of the file, change:
-
-```python
-from agentdrops.api.sessions import SessionStore
-```
-
-to:
-
-```python
-from agentdrops.repository.audit import AuditLog
-from agentdrops.repository.sessions import SessionStore
-```
-
 - [ ] **Step 5: Lint and type-check**
 
 Run: `.venv/bin/ruff check src/agentdrops/api/v1/chat.py && .venv/bin/mypy src/agentdrops/api/v1/chat.py`
@@ -1050,18 +1059,34 @@ git commit -m "feat: await Postgres sessions and record audit log in chat routes
 **Interfaces:**
 - Consumes: `SessionStore` (now async, Task 4).
 
-- [ ] **Step 1: Update the import**
+- [ ] **Step 1: Fix the import block**
 
-Change:
+At the top of `backend/src/agentdrops/api/v1/research.py`, replace:
 
 ```python
 from agentdrops.api.sessions import SessionStore
+from agentdrops.api.v1.schema import (
+    ReportResponse,
+    ResearchStatusResponse,
+    SessionsResponse,
+    SessionSummary,
+)
+from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
+from agentdrops.types.response import ErrorResponse, SuccessResponse
 ```
 
-to:
+with (alphabetical — `repository.sessions` sorts after `api.v1.schema`, before `types.*`):
 
 ```python
+from agentdrops.api.v1.schema import (
+    ReportResponse,
+    ResearchStatusResponse,
+    SessionsResponse,
+    SessionSummary,
+)
 from agentdrops.repository.sessions import SessionStore
+from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
+from agentdrops.types.response import ErrorResponse, SuccessResponse
 ```
 
 - [ ] **Step 2: Await `sessions.list_recent()` in `list_sessions`**
@@ -1170,10 +1195,21 @@ git commit -m "feat: await Postgres sessions in research routes"
 
 - [ ] **Step 1: Add fake pool/session/audit classes and patch the fixtures**
 
-In `backend/tests/unit/api/v1/conftest.py`, add these imports (after the existing ones):
+In `backend/tests/unit/api/v1/conftest.py`, add `from datetime import UTC, datetime` to the existing `from collections.abc import ...` / `from typing import Any` stdlib import group (alphabetically between them), and add one new import for the local package:
 
 ```python
+import json
+from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+
+import agentdrops.main as main_module
 from agentdrops.repository.sessions import SessionRecord, Status
+from tests.unit.agents.conftest import make_settings
 ```
 
 Add the fakes (after `_FailingGraph`, before the `client` fixture):
@@ -1195,8 +1231,6 @@ class _FakeSessionStore:
         self._sessions: dict[str, SessionRecord] = {}
 
     async def touch(self, thread_id: str, *, title: str) -> SessionRecord:
-        from datetime import UTC, datetime
-
         return self._sessions.setdefault(
             thread_id,
             SessionRecord(thread_id=thread_id, title=title, created_at=datetime.now(UTC)),
