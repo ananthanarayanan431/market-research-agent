@@ -14,7 +14,7 @@
 - `ruff check .` must pass: line-length 100, `select = ["E","F","I","UP","B","SIM","ASYNC"]`.
 - `mypy src` must pass in strict mode.
 - `pytest` config: `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed), `pythonpath = ["src"]`, `testpaths = ["tests"]`. Every test directory has an `__init__.py`.
-- No SQLAlchemy import anywhere under `src/agentdrops/` except `db/migrations/env.py` — app code talks to Postgres only through `asyncpg`.
+- No SQLAlchemy import anywhere under `src/agentdrops/` except `db/migrations/` (`env.py` and the version files under `db/migrations/versions/`, which use SQLAlchemy Core — `op.create_table`/`sa.Column` — for schema definitions) — app code outside `db/migrations/` talks to Postgres only through `asyncpg`.
 - `DATABASE_URL` is `postgresql+asyncpg://agentdrops:agentdrops@localhost:5432/agentdrops` by default (`.env.example`, matches `docker-compose.yml`); asyncpg's own DSN parser needs the `+asyncpg` marker stripped before connecting.
 - Commit messages follow this repo's existing style: `type: short description` (see `git log --oneline`), one commit per task below.
 - `docker compose up -d` (run from `backend/`) starts Postgres on 5432 — integration tests in Tasks 4–5 need it running; they auto-skip via `pytest.skip` if it isn't reachable, per the design spec's testing section. Don't treat a skip as a task failure.
@@ -339,7 +339,9 @@ Create Date: 2026-07-22
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "0001"
 down_revision: str | None = None
@@ -348,38 +350,56 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE TABLE sessions (
-            thread_id   TEXT PRIMARY KEY,
-            title       TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'clarifying',
-            report      TEXT,
-            sources     JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
+    op.create_table(
+        "sessions",
+        sa.Column("thread_id", sa.Text(), nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'clarifying'")),
+        sa.Column("report", sa.Text(), nullable=True),
+        sa.Column("sources", JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("thread_id"),
     )
-    op.execute(
-        """
-        CREATE TABLE audit_log (
-            id          BIGSERIAL PRIMARY KEY,
-            thread_id   TEXT NOT NULL REFERENCES sessions(thread_id) ON DELETE CASCADE,
-            operation   TEXT NOT NULL,
-            status      TEXT NOT NULL,
-            detail      JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
+    op.create_table(
+        "audit_log",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("thread_id", sa.Text(), nullable=False),
+        sa.Column("operation", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("detail", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["thread_id"], ["sessions.thread_id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
     )
-    op.execute("CREATE INDEX ix_audit_log_thread_id ON audit_log (thread_id)")
+    op.create_index("ix_audit_log_thread_id", "audit_log", ["thread_id"], unique=False)
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE audit_log")
-    op.execute("DROP TABLE sessions")
+    op.drop_index("ix_audit_log_thread_id", table_name="audit_log")
+    op.drop_table("audit_log")
+    op.drop_table("sessions")
 ```
+
+(Note: this migration was subsequently hand-edited to the SQLAlchemy ORM style shown above —
+`op.create_table`/`sa.Column` instead of raw `op.execute(SQL)` — see commit
+`refactor: use SQLAlchemy ORM style for sessions/audit_log migration`. The resulting schema is
+identical; only the migration's own authoring style changed.)
 
 - [ ] **Step 5: Start Postgres and apply the migration**
 

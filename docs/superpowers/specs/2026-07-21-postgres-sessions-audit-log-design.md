@@ -119,7 +119,7 @@ No changes to `_run_graph_turn`'s signature beyond what it already takes (it doe
 ## Dependencies & Migrations
 
 - Runtime (new, added to `[project.dependencies]`): `asyncpg`.
-- Migrations-only (new `db` extra, included in `dev`): `alembic`, `psycopg2-binary`. Alembic depends on SQLAlchemy core regardless of app usage; migration files use plain `op.execute("CREATE TABLE ...")` DDL, not ORM models, so no SQLAlchemy import ever appears in `src/agentdrops/`.
+- Migrations-only (new `db` extra, included in `dev`): `alembic`, `psycopg2-binary`. Migration version files use SQLAlchemy Core (`op.create_table`/`sa.Column`) for schema definitions, alongside `env.py` — the only two places under `db/migrations/` that import SQLAlchemy. App code outside `db/migrations/` never imports it.
 - `alembic.ini` lives at `backend/`, `script_location` pointing at `src/agentdrops/db/migrations`.
 - New command (documented in the backend README/CLAUDE.md commands section): `alembic upgrade head`, run against `DATABASE_URL` before starting the API — required in dev (after `docker compose up -d`) and in any deploy.
 
