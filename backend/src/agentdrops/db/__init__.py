@@ -1,1 +1,1 @@
-"""Postgres connection pool and schema migrations. Data access lives in `agentdrops.repository`."""
+"""SQLAlchemy async engine and schema migrations. Data access lives in `agentdrops.repository`."""

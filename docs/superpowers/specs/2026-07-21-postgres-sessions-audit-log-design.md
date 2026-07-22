@@ -2,6 +2,18 @@
 
 Date: 2026-07-21
 
+> **Implementation note (2026-07-22):** the sections below describe the originally-planned
+> raw-`asyncpg` design. Partway through implementation, the actual architecture pivoted to a full
+> SQLAlchemy 2.0 async ORM instead — `db/engine.py` (`create_async_engine`/`async_sessionmaker`,
+> not a raw `db/pool.py`), `db/models/` (declarative `SessionTable`/`AuditLogTable`/`Base`, the
+> autogenerate source of truth for Alembic), and a `service/` layer (`ChatService`,
+> `ResearchService`, `SessionsService`) sitting between thin `api/v1/` routers and
+> `repository/sessions.py`/`repository/audit.py`. The schema (tables, columns, FK, index) and the
+> audit-log semantics (one row per completed `/chat`/`/chat/stream` call) are unchanged from what's
+> described below — only the query layer and where business logic lives changed. Treat the
+> "Architecture", "Connection Pool", and code-signature sections below as historical context for
+> *why* the tables look the way they do, not as a description of the current code.
+
 ## Problem Statement
 
 `Settings.database_url` (`backend/src/agentdrops/config.py`) has existed since the initial backend foundations but nothing in `src/` uses it. Session state (`repository/sessions.py::SessionStore`, formerly `api/sessions.py` — already renamed on disk ahead of this change, content unchanged) is a plain in-process `dict`, and there is no record of what operations the API performed — both die on process restart, and neither is shared across replicas. This spec wires `database_url` up to a real Postgres connection pool, replaces the in-memory `SessionStore` with a Postgres-backed one, and adds an audit log of completed chat turns.
@@ -22,7 +34,7 @@ This is a standalone slice, independent of `2026-07-21-background-workers-redis-
 - Celery/Redis job execution (separate design doc, separate future change).
 - LangGraph checkpointer backend swap (`InMemorySaver` stays as-is).
 - Auditing every HTTP request or every graph node — only the turn-level outcome of `/chat` and `/chat/stream`.
-- An ORM layer — the app queries Postgres with raw SQL via `asyncpg`; SQLAlchemy is used only inside Alembic's migration runner, never imported by app code.
+- ~~An ORM layer — the app queries Postgres with raw SQL via `asyncpg`; SQLAlchemy is used only inside Alembic's migration runner, never imported by app code.~~ **Superseded 2026-07-22**: the app now queries through SQLAlchemy's async ORM (`db/models/`, `db/engine.py`) instead of raw `asyncpg`. `db/models/` doubles as the Alembic autogenerate source-of-truth (`env.py`'s `target_metadata`). See `repository/sessions.py`, `repository/audit.py`, and the `service/` layer for the resulting shape; this section otherwise reflects the original raw-SQL design as written.
 
 ## Architecture
 

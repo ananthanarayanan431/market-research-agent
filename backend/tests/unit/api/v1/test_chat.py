@@ -14,6 +14,13 @@ def test_chat_first_turn_asks_for_clarification(client: TestClient) -> None:
     assert data["response"] == "Which region should I focus on?"
     assert data["report"] is None
 
+    audit = client.app.state.audit.records
+    assert len(audit) == 1
+    assert audit[0]["thread_id"] == data["thread_id"]
+    assert audit[0]["operation"] == "chat"
+    assert audit[0]["status"] == "clarify"
+    assert audit[0]["detail"] == {}
+
 
 def test_chat_follow_up_returns_final_report(client: TestClient) -> None:
     first = client.post("/v1/chat", json={"message": "Research the EV charging market"})
@@ -25,6 +32,13 @@ def test_chat_follow_up_returns_final_report(client: TestClient) -> None:
     assert data["is_followup"] is False
     assert data["report"] == "# EV Charging Market Report"
     assert data["thread_id"] == thread_id
+
+    audit = client.app.state.audit.records
+    assert len(audit) == 2
+    assert audit[1]["thread_id"] == thread_id
+    assert audit[1]["operation"] == "chat"
+    assert audit[1]["status"] == "done"
+    assert audit[1]["detail"] == {"report_chars": len(data["report"])}
 
 
 def test_chat_stream_first_turn_emits_clarify_event(client: TestClient) -> None:
@@ -66,6 +80,13 @@ def test_chat_stream_second_turn_emits_progress_source_and_done(client: TestClie
         "report": "# EV Charging Market Report",
     }
 
+    audit = client.app.state.audit.records
+    assert len(audit) == 2
+    assert audit[1]["thread_id"] == thread_id
+    assert audit[1]["operation"] == "chat_stream"
+    assert audit[1]["status"] == "done"
+    assert audit[1]["detail"] == {"report_chars": len(events[-1]["report"])}
+
 
 def test_chat_persists_sources_same_as_chat_stream(client: TestClient) -> None:
     """/chat drives the same graph.astream as /chat/stream, so sources aren't dropped."""
@@ -97,6 +118,13 @@ def test_chat_returns_502_and_marks_session_failed_on_graph_error(
     status_body = failing_client.get(f"/v1/research/{sessions[0]['id']}").json()
     assert status_body["data"]["status"] == "failed"
 
+    audit = failing_client.app.state.audit.records
+    assert len(audit) == 1
+    assert audit[0]["thread_id"] == sessions[0]["id"]
+    assert audit[0]["operation"] == "chat"
+    assert audit[0]["status"] == "failed"
+    assert audit[0]["detail"] == {"error": "LLM provider unavailable"}
+
 
 def test_chat_stream_emits_error_event_and_marks_session_failed(
     failing_client: TestClient,
@@ -112,3 +140,10 @@ def test_chat_stream_emits_error_event_and_marks_session_failed(
 
     sessions = failing_client.get("/v1/research/sessions").json()["data"]["sessions"]
     assert sessions[0]["status"] == "failed"
+
+    audit = failing_client.app.state.audit.records
+    assert len(audit) == 1
+    assert audit[0]["thread_id"] == sessions[0]["id"]
+    assert audit[0]["operation"] == "chat_stream"
+    assert audit[0]["status"] == "failed"
+    assert audit[0]["detail"] == {"error": "LLM provider unavailable"}

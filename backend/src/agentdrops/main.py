@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 sessions = SessionStore(session_factory)
                 audit = AuditLog(session_factory)
                 app.state.engine = engine
+                app.state.audit = audit
                 app.state.chat_service = ChatService(graph, sessions, audit)
                 app.state.research_service = ResearchService(graph, sessions)
                 app.state.sessions_service = SessionsService(sessions)
