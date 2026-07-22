@@ -16,7 +16,16 @@ async def test_touch_creates_a_session_once(
     assert first.thread_id == second.thread_id == "t1"
     assert first.title == "EV charging in the EU"
     assert second.title == "EV charging in the EU"
-    assert first.status == "clarifying"
+    assert first.status == "queued"
+
+
+async def test_touch_defaults_to_queued(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    session = await store.touch("t-queued", title="EV charging in the EU")
+
+    assert session.status == "queued"
 
 
 async def test_set_status_updates_status_and_optional_report(
@@ -36,6 +45,23 @@ async def test_set_status_updates_status_and_optional_report(
     assert done is not None
     assert done.status == "done"
     assert done.report == "# Report"
+
+
+async def test_set_status_stores_clarify_question_and_error(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t4", title="EV charging in the EU")
+
+    await store.set_status("t4", "clarifying", clarify_question="Which region?")
+    clarifying = await store.get("t4")
+    assert clarifying is not None
+    assert clarifying.clarify_question == "Which region?"
+
+    await store.set_status("t4", "failed", error="LLM provider unavailable")
+    failed = await store.get("t4")
+    assert failed is not None
+    assert failed.error == "LLM provider unavailable"
 
 
 async def test_add_source_appends_to_sources(

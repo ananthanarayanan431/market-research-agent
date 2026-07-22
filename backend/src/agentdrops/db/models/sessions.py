@@ -15,9 +15,11 @@ class SessionTable(Base):
     thread_id: Mapped[str] = mapped_column(sa.Text(), primary_key=True)
     title: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     status: Mapped[str] = mapped_column(
-        sa.Text(), nullable=False, server_default=sa.text("'clarifying'")
+        sa.Text(), nullable=False, server_default=sa.text("'queued'")
     )
     report: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    clarify_question: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     sources: Mapped[list[dict[str, str]]] = mapped_column(
         JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
     )

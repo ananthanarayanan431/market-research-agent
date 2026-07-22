@@ -99,7 +99,13 @@ class _FakeSessionStore:
         )
 
     async def set_status(
-        self, thread_id: str, status: Status, *, report: str | None = None
+        self,
+        thread_id: str,
+        status: Status,
+        *,
+        report: str | None = None,
+        clarify_question: str | None = None,
+        error: str | None = None,
     ) -> None:
         session = self._sessions.get(thread_id)
         if session is None:
@@ -107,6 +113,10 @@ class _FakeSessionStore:
         session.status = status
         if report is not None:
             session.report = report
+        if clarify_question is not None:
+            session.clarify_question = clarify_question
+        if error is not None:
+            session.error = error
 
     async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
         session = self._sessions.get(thread_id)

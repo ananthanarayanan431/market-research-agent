@@ -18,9 +18,9 @@ class ResearchService:
         graph's own checkpoint (a failed run may leave an incomplete checkpoint the graph can't
         classify). Returns `None` if `thread_id` is unknown to both."""
         session = await self._sessions.get(thread_id)
-        if session is not None and session.status == "failed":
+        if session is not None and session.status in ("failed", "queued"):
             return ResearchStatusResponse(
-                thread_id=thread_id, status="failed", research_brief=None, report=None
+                thread_id=thread_id, status=session.status, research_brief=None, report=None
             )
 
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}

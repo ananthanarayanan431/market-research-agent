@@ -19,7 +19,7 @@ from sqlalchemy.sql import func
 
 from agentdrops.db.models import SessionTable
 
-Status = Literal["clarifying", "running", "done", "failed"]
+Status = Literal["queued", "clarifying", "running", "done", "failed"]
 
 
 @dataclass
@@ -29,9 +29,11 @@ class SessionRecord:
     thread_id: str
     title: str
     created_at: datetime
-    status: Status = "clarifying"
+    status: Status = "queued"
     report: str | None = None
     sources: list[dict[str, str]] = field(default_factory=list)
+    clarify_question: str | None = None
+    error: str | None = None
 
 
 def _to_record(row: SessionTable) -> SessionRecord:
@@ -42,6 +44,8 @@ def _to_record(row: SessionTable) -> SessionRecord:
         status=type_cast(Status, row.status),
         report=row.report,
         sources=row.sources,
+        clarify_question=row.clarify_question,
+        error=row.error,
     )
 
 
@@ -68,12 +72,22 @@ class SessionStore:
             return _to_record(row)
 
     async def set_status(
-        self, thread_id: str, status: Status, *, report: str | None = None
+        self,
+        thread_id: str,
+        status: Status,
+        *,
+        report: str | None = None,
+        clarify_question: str | None = None,
+        error: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
             values: dict[str, object] = {"status": status, "updated_at": func.now()}
             if report is not None:
                 values["report"] = report
+            if clarify_question is not None:
+                values["clarify_question"] = clarify_question
+            if error is not None:
+                values["error"] = error
             await session.execute(
                 update(SessionTable).where(SessionTable.thread_id == thread_id).values(**values)
             )

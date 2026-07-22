@@ -62,7 +62,9 @@ class ChatService:
                             "needs_clarification"
                         ):
                             question = str(node_output["messages"][-1].content)
-                            await self._sessions.set_status(thread_id, "clarifying")
+                            await self._sessions.set_status(
+                                thread_id, "clarifying", clarify_question=question
+                            )
                             outcome = "clarify"
                             await self._audit.record(
                                 thread_id, operation=operation, status="clarify"
@@ -98,7 +100,7 @@ class ChatService:
     async def record_failure(self, thread_id: str, *, operation: str, error: str) -> None:
         """Record a failed turn: session status plus an audit entry, shared by both endpoints'
         except blocks so the failure side effects can't diverge."""
-        await self._sessions.set_status(thread_id, "failed")
+        await self._sessions.set_status(thread_id, "failed", error=error)
         await self._audit.record(
             thread_id, operation=operation, status="failed", detail={"error": error}
         )
