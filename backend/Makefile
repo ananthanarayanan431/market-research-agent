@@ -11,12 +11,15 @@ UVICORN     := $(VENV)/bin/uvicorn
 PYTEST      := $(PYTHON) -m pytest
 RUFF        := $(VENV)/bin/ruff
 MYPY        := $(VENV)/bin/mypy
+ALEMBIC     := $(VENV)/bin/alembic
 
 APP         := agentdrops.main:app
 HOST        ?= 0.0.0.0
 # Port 8001, not 8000: SigNoz's MCP server owns 8000 (see casting.yaml / frontend/src/lib/api.ts).
 PORT        ?= 8001
 LOG_LEVEL   ?= info
+REV         ?= -1
+MSG         ?=
 
 # ── Colors (disable with NO_COLOR=1) ─────────────────────────────────────────
 ifndef NO_COLOR
@@ -48,7 +51,8 @@ printf "\n$(MAGENTA)$(BOLD)==> %s$(RESET)\n" "$(1)"
 endef
 
 .PHONY: help venv install env infra-up infra-down infra-restart infra-ps infra-logs infra-reset \
-        run dev stop test test-file lint lint-fix format typecheck check clean doctor
+        run dev stop test test-file lint lint-fix format typecheck check clean doctor \
+        db-upgrade db-downgrade db-revision db-check db-current db-history
 
 help: ## Show this help
 	@printf "$(BOLD)Agentdrops backend — make targets$(RESET)\n\n"
@@ -98,6 +102,37 @@ infra-ps: ## Show infra container status
 
 infra-logs: ## Tail infra container logs
 	@docker compose logs -f
+
+db-upgrade: infra-up ## Apply all pending Alembic migrations (schema/models must already agree)
+	@$(call banner,Applying migrations (alembic upgrade head))
+	@$(ALEMBIC) upgrade head \
+		&& $(call log_ok,migrations applied) \
+		|| ($(call log_err,migration failed); exit 1)
+
+db-downgrade: ## Roll back migrations: make db-downgrade [REV=-1]
+	@$(call banner,Rolling back (alembic downgrade $(REV)))
+	@$(ALEMBIC) downgrade $(REV) \
+		&& $(call log_ok,rolled back to $(REV)) \
+		|| ($(call log_err,downgrade failed); exit 1)
+
+db-revision: ## Autogenerate a migration from db/models: make db-revision MSG="add foo"
+	@if [ -z "$(MSG)" ]; then $(call log_err,MSG is required — e.g. \`make db-revision MSG="add foo"\`); exit 1; fi
+	@$(call banner,Generating migration: $(MSG))
+	@$(ALEMBIC) revision --autogenerate -m "$(MSG)" \
+		&& $(call log_ok,migration file generated under db/migrations/versions/) \
+		|| ($(call log_err,revision generation failed); exit 1)
+
+db-check: infra-up ## Verify db/models match the applied schema (fails on autogenerate drift)
+	@$(call banner,Checking models against schema (alembic check))
+	@$(ALEMBIC) check \
+		&& $(call log_ok,models match the applied schema) \
+		|| ($(call log_err,models have drifted from the schema — run \`make db-revision\`); exit 1)
+
+db-current: ## Show the current Alembic revision applied to the database
+	@$(ALEMBIC) current
+
+db-history: ## Show the full Alembic migration history
+	@$(ALEMBIC) history --verbose
 
 run: infra-up ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
 	@$(call banner,Starting Agentdrops backend)
