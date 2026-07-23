@@ -51,7 +51,7 @@ printf "\n$(MAGENTA)$(BOLD)==> %s$(RESET)\n" "$(1)"
 endef
 
 .PHONY: help venv install env infra-up infra-down infra-restart infra-ps infra-logs infra-reset \
-        run dev stop test test-file lint lint-fix format typecheck check clean doctor \
+        run dev worker stop test test-file lint lint-fix format typecheck check clean doctor \
         db-upgrade db-downgrade db-revision db-check db-current db-history
 
 help: ## Show this help
@@ -148,6 +148,15 @@ run: infra-up ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
 	@$(call log_info,docs at http://localhost:$(PORT)/docs)
 	@$(UVICORN) $(APP) --host $(HOST) --port $(PORT) --reload --log-level $(LOG_LEVEL) \
 		|| ($(call log_err,backend server exited non-zero); exit 1)
+
+worker: infra-up ## Start a Celery worker processing background research turns
+	@$(call banner,Starting Agentdrops worker)
+	@$(call log_info,python=$$($(PYTHON) --version 2>&1) git=$$(git rev-parse --short HEAD 2>/dev/null || echo n/a))
+	@if [ ! -f .env ]; then \
+		$(call log_warn,.env not found — run \`make env\` first (Settings will fail fast without it)); \
+	fi
+	@$(VENV)/bin/celery -A agentdrops.worker.app worker --loglevel=info \
+		|| ($(call log_err,worker exited non-zero); exit 1)
 
 dev: run ## Alias for `run`
 
