@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 
 from agentdrops.agents.checkpointer import checkpointer
@@ -25,6 +26,7 @@ from agentdrops.service.research_service import ResearchService
 from agentdrops.service.sessions_service import SessionsService
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
+from agentdrops.worker.celery_app import configure_celery
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +42,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     providers = configure_observability(settings)
+    configure_celery(settings)
     try:
         engine = create_engine(settings)
+        redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
         try:
             async with (
                 httpx.AsyncClient(timeout=30.0) as client,
@@ -52,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 sessions = SessionStore(session_factory)
                 audit = AuditLog(session_factory)
                 app.state.engine = engine
+                app.state.redis = redis
                 app.state.sessions = sessions
                 app.state.audit = audit
                 app.state.chat_service = ChatService(graph, sessions, audit)
@@ -59,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.sessions_service = SessionsService(sessions)
                 yield
         finally:
+            await redis.aclose()
             await engine.dispose()
     finally:
         providers.shutdown()

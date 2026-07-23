@@ -5,9 +5,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+import agentdrops.api.v1.chat as chat_module
 import agentdrops.main as main_module
 from agentdrops.repository.sessions import SessionRecord, Status
 from tests.unit.agents.conftest import make_settings
@@ -56,20 +59,6 @@ class _FakeGraph:
     async def aget_state(self, config: dict) -> _StateSnapshot:
         thread_id = config["configurable"]["thread_id"]
         return _StateSnapshot(self._values.get(thread_id, {}))
-
-
-class _FailingGraph:
-    """Fake compiled graph: streams a couple of events, then blows up mid-run."""
-
-    async def astream(
-        self, _inputs: dict, config: dict, stream_mode: list[str]
-    ) -> AsyncIterator[tuple[str, dict]]:
-        yield ("updates", {"clarify_with_user": {"needs_clarification": False, "messages": []}})
-        yield ("updates", {"write_research_brief": {}})
-        raise RuntimeError("LLM provider unavailable")
-
-    async def aget_state(self, config: dict) -> _StateSnapshot:
-        return _StateSnapshot({})
 
 
 class _FakeEngine:
@@ -170,6 +159,29 @@ def _patch_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "checkpointer", _fake_checkpointer)
 
 
+class _FakeDelay:
+    """Stand-in for Celery's `.delay(...)`: records calls instead of touching a real broker."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, thread_id: str, message: str, operation: str) -> None:
+        self.calls.append((thread_id, message, operation))
+
+
+def _patch_celery_and_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeDelay:
+    monkeypatch.setattr(main_module, "configure_celery", lambda settings: None)
+    shared_server = FakeServer()
+    monkeypatch.setattr(
+        main_module.Redis,
+        "from_url",
+        staticmethod(lambda *_a, **_k: FakeRedis(server=shared_server, decode_responses=True)),
+    )
+    fake_delay = _FakeDelay()
+    monkeypatch.setattr(chat_module.run_turn_task, "delay", fake_delay)
+    return fake_delay
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
@@ -179,20 +191,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         lambda settings, client, checkpointer: _FakeGraph(),
     )
     _patch_db(monkeypatch)
+    fake_delay = _patch_celery_and_redis(monkeypatch)
     with TestClient(main_module.app) as test_client:
-        yield test_client
-
-
-@pytest.fixture
-def failing_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
-    monkeypatch.setattr(
-        main_module,
-        "build_market_researcher",
-        lambda settings, client, checkpointer: _FailingGraph(),
-    )
-    _patch_db(monkeypatch)
-    with TestClient(main_module.app) as test_client:
+        test_client.fake_delay = fake_delay  # type: ignore[attr-defined]
         yield test_client
 
 

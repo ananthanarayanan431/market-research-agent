@@ -1,156 +1,102 @@
+from collections.abc import AsyncIterator
+from typing import Any
+
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.unit.api.v1.conftest import parse_sse
 
 
-def test_chat_first_turn_asks_for_clarification(client: TestClient) -> None:
+def test_chat_enqueues_and_returns_queued_immediately(client: TestClient) -> None:
     response = client.post("/v1/chat", json={"message": "Research the EV charging market"})
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    data = body["data"]
-    assert data["is_followup"] is True
-    assert data["response"] == "Which region should I focus on?"
-    assert data["report"] is None
+    body = response.json()["data"]
+    assert body["status"] == "queued"
+    thread_id = body["thread_id"]
+    assert client.fake_delay.calls == [  # type: ignore[attr-defined]
+        (thread_id, "Research the EV charging market", "chat")
+    ]
 
-    audit = client.app.state.audit.records
-    assert len(audit) == 1
-    assert audit[0]["thread_id"] == data["thread_id"]
-    assert audit[0]["operation"] == "chat"
-    assert audit[0]["status"] == "clarify"
-    assert audit[0]["detail"] == {}
+    status_response = client.get(f"/v1/research/{thread_id}")
+    assert status_response.json()["data"]["status"] == "queued"
 
 
-def test_chat_follow_up_returns_final_report(client: TestClient) -> None:
-    first = client.post("/v1/chat", json={"message": "Research the EV charging market"})
-    thread_id = first.json()["data"]["thread_id"]
-
-    second = client.post("/v1/chat", json={"thread_id": thread_id, "message": "Focus on the EU"})
-
-    data = second.json()["data"]
-    assert data["is_followup"] is False
-    assert data["report"] == "# EV Charging Market Report"
-    assert data["thread_id"] == thread_id
-
-    audit = client.app.state.audit.records
-    assert len(audit) == 2
-    assert audit[1]["thread_id"] == thread_id
-    assert audit[1]["operation"] == "chat"
-    assert audit[1]["status"] == "done"
-    assert audit[1]["detail"] == {"report_chars": len(data["report"])}
-
-
-def test_chat_stream_first_turn_emits_clarify_event(client: TestClient) -> None:
-    response = client.post(
-        "/v1/chat/stream", json={"message": "Research the EV charging market"}
+async def test_chat_stream_reconstructs_clarify_event_if_already_clarifying(
+    client: TestClient,
+) -> None:
+    sessions = client.app.state.sessions
+    await sessions.touch("t-clarify", title="Research the EV charging market")
+    await sessions.set_status(
+        "t-clarify", "clarifying", clarify_question="Which region should I focus on?"
     )
 
-    assert response.status_code == 200
+    response = client.post(
+        "/v1/chat/stream", json={"thread_id": "t-clarify", "message": "Research the EV market"}
+    )
+
     events = parse_sse(response.text)
     assert events == [
         {
             "type": "clarify",
-            "thread_id": events[0]["thread_id"],
+            "thread_id": "t-clarify",
             "response": "Which region should I focus on?",
         }
     ]
 
-    audit = client.app.state.audit.records
-    assert len(audit) == 1
-    assert audit[0]["thread_id"] == events[0]["thread_id"]
-    assert audit[0]["operation"] == "chat_stream"
-    assert audit[0]["status"] == "clarify"
-    assert audit[0]["detail"] == {}
 
+async def test_chat_stream_reconstructs_done_event_if_already_done(client: TestClient) -> None:
+    sessions = client.app.state.sessions
+    await sessions.touch("t-done", title="Research the EV charging market")
+    await sessions.set_status("t-done", "done", report="# EV Charging Market Report")
 
-def test_chat_stream_second_turn_emits_progress_source_and_done(client: TestClient) -> None:
-    first = client.post("/v1/chat/stream", json={"message": "Research the EV charging market"})
-    thread_id = parse_sse(first.text)[0]["thread_id"]
-
-    second = client.post(
-        "/v1/chat/stream", json={"thread_id": thread_id, "message": "Focus on the EU"}
+    response = client.post(
+        "/v1/chat/stream", json={"thread_id": "t-done", "message": "Focus on the EU"}
     )
 
-    events = parse_sse(second.text)
-    assert {"type": "progress", "step": "Planning research approach"} in events
-    assert {"type": "progress", "step": "Coordinating research"} in events
-    assert {
-        "type": "progress",
-        "step": "researching",
-        "detail": "Researching: EU",
-    } in events
-    assert {"type": "source", "topic": "EU", "summary": "EU findings"} in events
-    assert events[-1] == {
-        "type": "done",
-        "thread_id": thread_id,
-        "report": "# EV Charging Market Report",
-    }
-
-    audit = client.app.state.audit.records
-    assert len(audit) == 2
-    assert audit[1]["thread_id"] == thread_id
-    assert audit[1]["operation"] == "chat_stream"
-    assert audit[1]["status"] == "done"
-    assert audit[1]["detail"] == {"report_chars": len(events[-1]["report"])}
+    events = parse_sse(response.text)
+    assert events == [
+        {"type": "done", "thread_id": "t-done", "report": "# EV Charging Market Report"}
+    ]
 
 
-def test_chat_persists_sources_same_as_chat_stream(client: TestClient) -> None:
-    """/chat drives the same graph.astream as /chat/stream, so sources aren't dropped."""
-    first = client.post("/v1/chat", json={"message": "Research the EV charging market"})
-    thread_id = first.json()["data"]["thread_id"]
-    client.post("/v1/chat", json={"thread_id": thread_id, "message": "Focus on the EU"})
+async def test_chat_stream_reconstructs_error_event_if_already_failed(client: TestClient) -> None:
+    sessions = client.app.state.sessions
+    await sessions.touch("t-failed", title="Research the EV charging market")
+    await sessions.set_status("t-failed", "failed", error="LLM provider unavailable")
 
-    response = client.get(f"/v1/research/{thread_id}/report")
-
-    assert response.status_code == 200
-    assert response.json()["data"]["sources"] == [{"topic": "EU", "summary": "EU findings"}]
-
-
-def test_chat_returns_502_and_marks_session_failed_on_graph_error(
-    failing_client: TestClient,
-) -> None:
-    response = failing_client.post(
-        "/v1/chat", json={"message": "Research the EV charging market"}
+    response = client.post(
+        "/v1/chat/stream", json={"thread_id": "t-failed", "message": "Research the EV market"}
     )
 
-    assert response.status_code == 502
-    error = response.json()
-    assert error["success"] is False
-    assert error["data"]["code"] == 502
-
-    sessions = failing_client.get("/v1/research/sessions").json()["data"]["sessions"]
-    assert sessions[0]["status"] == "failed"
-
-    status_body = failing_client.get(f"/v1/research/{sessions[0]['id']}").json()
-    assert status_body["data"]["status"] == "failed"
-
-    audit = failing_client.app.state.audit.records
-    assert len(audit) == 1
-    assert audit[0]["thread_id"] == sessions[0]["id"]
-    assert audit[0]["operation"] == "chat"
-    assert audit[0]["status"] == "failed"
-    assert audit[0]["detail"] == {"error": "LLM provider unavailable"}
+    events = parse_sse(response.text)
+    assert events == [
+        {"type": "error", "thread_id": "t-failed", "message": "LLM provider unavailable"}
+    ]
 
 
-def test_chat_stream_emits_error_event_and_marks_session_failed(
-    failing_client: TestClient,
+async def test_chat_stream_emits_error_event_if_subscription_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    response = failing_client.post(
+    """A dropped Redis connection mid-subscribe must surface as an `error` SSE event, not hang
+    the response open with nothing ever arriving."""
+    import agentdrops.api.v1.chat as chat_module
+
+    async def _broken_subscribe(_redis: Any, _thread_id: str) -> AsyncIterator[dict[str, Any]]:
+        raise ConnectionError("connection to Redis lost")
+        yield {}  # pragma: no cover — makes this an async generator; never reached
+
+    monkeypatch.setattr(chat_module, "subscribe_events", _broken_subscribe)
+
+    response = client.post(
         "/v1/chat/stream", json={"message": "Research the EV charging market"}
     )
 
-    assert response.status_code == 200
     events = parse_sse(response.text)
-    assert events[-1]["type"] == "error"
-    assert events[-1]["message"] == "LLM provider unavailable"
-
-    sessions = failing_client.get("/v1/research/sessions").json()["data"]["sessions"]
-    assert sessions[0]["status"] == "failed"
-
-    audit = failing_client.app.state.audit.records
-    assert len(audit) == 1
-    assert audit[0]["thread_id"] == sessions[0]["id"]
-    assert audit[0]["operation"] == "chat_stream"
-    assert audit[0]["status"] == "failed"
-    assert audit[0]["detail"] == {"error": "LLM provider unavailable"}
+    assert events == [
+        {
+            "type": "error",
+            "thread_id": events[0]["thread_id"],
+            "message": "connection to Redis lost",
+        }
+    ]

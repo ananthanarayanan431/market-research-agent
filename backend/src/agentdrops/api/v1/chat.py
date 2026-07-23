@@ -1,4 +1,8 @@
-"""Chat endpoints: advance one research turn, either as a single response or an SSE stream."""
+"""Chat endpoints: enqueue one research turn, either acknowledged immediately or observed live
+via SSE. Execution itself happens in a Celery worker (`agentdrops.worker.tasks.run_turn_task`) —
+see `agentdrops/worker/runner.py` for the worker-side counterpart of what this module used to do
+directly through `ChatService.run_turn`.
+"""
 
 import json
 import logging
@@ -8,15 +12,21 @@ from typing import Any
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import StreamingResponse
+from redis.asyncio import Redis
 
-from agentdrops.api.v1.schema import ChatRequest, ChatResponse
-from agentdrops.service.chat_service import ChatService
-from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
-from agentdrops.types.response import ErrorResponse, SuccessResponse
+from agentdrops.api.v1.schema import ChatQueuedResponse, ChatRequest
+from agentdrops.config.constants import CHAT_TITLE_MAX_LENGTH
+from agentdrops.jobs.events import subscribe_events
+from agentdrops.repository.sessions import SessionRecord, SessionStore
+from agentdrops.types.response import SuccessResponse
+from agentdrops.worker.tasks import run_turn_task
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
+
+_TERMINAL_STATUSES = {"done", "clarifying", "failed"}
+_TERMINAL_EVENT_TYPES = {"clarify", "done", "error"}
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -24,47 +34,40 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-_CHAT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
-    status.HTTP_502_BAD_GATEWAY: fastAPIErrorResponseModels[status.HTTP_502_BAD_GATEWAY]
-}
+def _terminal_event_from_session(thread_id: str, session: SessionRecord) -> dict[str, Any] | None:
+    """Reconstruct the terminal SSE event from a session record already settled by the time
+    `/chat/stream` subscribes — the race window between enqueueing and subscribing."""
+    if session.status == "done":
+        return {"type": "done", "thread_id": thread_id, "report": session.report}
+    if session.status == "clarifying":
+        return {
+            "type": "clarify",
+            "thread_id": thread_id,
+            "response": session.clarify_question or "",
+        }
+    if session.status == "failed":
+        return {
+            "type": "error",
+            "thread_id": thread_id,
+            "message": session.error or "Research failed",
+        }
+    return None
 
 
 @router.post(
     "/chat",
-    response_model=SuccessResponse[ChatResponse],
+    response_model=SuccessResponse[ChatQueuedResponse],
     status_code=status.HTTP_200_OK,
-    summary="Advance a chat turn",
-    responses=_CHAT_ERROR_RESPONSES,
+    summary="Enqueue a chat turn",
 )
-async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatResponse]:
-    """Advance one chat turn: clarify, research, and report, resuming state via `thread_id`."""
+async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueuedResponse]:
+    """Enqueue one chat turn for background execution; poll GET /research/{thread_id} for the
+    result, or use /chat/stream instead to observe it live."""
     thread_id = body.thread_id or str(uuid.uuid4())
-    service: ChatService = request.app.state.chat_service
-
-    terminal: dict[str, Any] | None = None
-    try:
-        async for event in service.run_turn(thread_id, body.message, operation="chat"):
-            terminal = event
-    except Exception as exc:
-        logger.exception("chat turn failed for thread_id=%s", thread_id)
-        await service.record_failure(thread_id, operation="chat", error=str(exc))
-        raise ErrorResponse(
-            BadGatewayError(message="Research agent failed to complete this turn")
-        ) from exc
-
-    assert terminal is not None
-    if terminal["type"] == "done":
-        return SuccessResponse(
-            data=ChatResponse(
-                thread_id=thread_id,
-                response=terminal["report"],
-                is_followup=False,
-                report=terminal["report"],
-            )
-        )
-    return SuccessResponse(
-        data=ChatResponse(thread_id=thread_id, response=terminal["response"], is_followup=True)
-    )
+    sessions: SessionStore = request.app.state.sessions
+    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
+    run_turn_task.delay(thread_id, body.message, "chat")
+    return SuccessResponse(data=ChatQueuedResponse(thread_id=thread_id))
 
 
 @router.post(
@@ -73,9 +76,9 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatRespo
     summary="Advance a chat turn, streamed via SSE",
 )
 async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
-    """Advance one chat turn, streaming progress/source events as the graph runs, via SSE.
+    """Enqueue one chat turn, then stream its progress/source events as the worker runs it, via
+    SSE — event shapes unchanged from before this turn ran in a background worker:
 
-    Event shapes:
     - `{"type": "progress", "step": str, "detail"?: str}` — a top-level stage started, or (from
       inside the supervisor) one delegated research topic began.
     - `{"type": "source", "topic": str, "summary": str}` — one delegated topic finished.
@@ -85,17 +88,29 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     - `{"type": "error", "thread_id": str, "message": str}` — terminal: the run failed.
     """
     thread_id = body.thread_id or str(uuid.uuid4())
-    service: ChatService = request.app.state.chat_service
+    sessions: SessionStore = request.app.state.sessions
+    redis: Redis = request.app.state.redis
+    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
+    run_turn_task.delay(thread_id, body.message, "chat_stream")
 
     async def events() -> AsyncIterator[str]:
+        # The task may have already finished by the time we get here (enqueue-then-subscribe
+        # race) — check the session record first rather than subscribing blind and hanging.
+        session = await sessions.get(thread_id)
+        if session is not None and session.status in _TERMINAL_STATUSES:
+            terminal = _terminal_event_from_session(thread_id, session)
+            if terminal is not None:
+                yield _sse(terminal)
+                return
         try:
-            async for event in service.run_turn(
-                thread_id, body.message, operation="chat_stream"
-            ):
+            async for event in subscribe_events(redis, thread_id):
                 yield _sse(event)
+                if event.get("type") in _TERMINAL_EVENT_TYPES:
+                    return
         except Exception as exc:
-            logger.exception("chat/stream turn failed for thread_id=%s", thread_id)
-            await service.record_failure(thread_id, operation="chat_stream", error=str(exc))
+            # e.g. the Redis connection drops mid-stream — surface it to the client instead of
+            # letting the SSE response hang open with no further events ever arriving.
+            logger.exception("chat/stream subscription failed for thread_id=%s", thread_id)
             yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
 
     return StreamingResponse(events(), media_type="text/event-stream")

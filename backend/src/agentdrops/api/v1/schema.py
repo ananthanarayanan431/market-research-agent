@@ -12,13 +12,13 @@ class ChatRequest(BaseModel):
     message: str
 
 
-class ChatResponse(BaseModel):
-    """One chat turn's result: which thread it belongs to, the reply, and the report once ready."""
+class ChatQueuedResponse(BaseModel):
+    """Acknowledgement that one chat turn was enqueued; poll GET /research/{thread_id} or use
+    /chat/stream to observe it. Replaces `ChatResponse`, which returned the turn's full result
+    inline — no longer possible once the turn runs in a background worker."""
 
     thread_id: str
-    response: str
-    is_followup: bool
-    report: str | None = None
+    status: Literal["queued"] = "queued"
 
 
 class ResearchStatusResponse(BaseModel):
