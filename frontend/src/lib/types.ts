@@ -21,7 +21,7 @@ export type StreamEvent =
   | { type: "done"; thread_id: string; report: string }
   | { type: "error"; thread_id: string; message: string };
 
-export type ResearchStatusValue = "clarifying" | "running" | "done" | "failed";
+export type ResearchStatusValue = "queued" | "clarifying" | "running" | "done" | "failed";
 
 export type SessionSummary = {
   id: string;

@@ -133,7 +133,11 @@ export default function Home() {
       if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
-      if (status.status === "clarifying" || status.status === "running") {
+      if (
+        status.status === "clarifying" ||
+        status.status === "running" ||
+        status.status === "queued"
+      ) {
         pollUntilSettled(session.id, token);
       }
     } catch {
