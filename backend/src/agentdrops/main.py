@@ -21,6 +21,7 @@ from agentdrops.db.engine import create_engine, create_session_factory
 from agentdrops.observability.setup import configure_observability, instrument_fastapi
 from agentdrops.repository.audit import AuditLog
 from agentdrops.repository.sessions import SessionStore
+from agentdrops.service.chat_queue_service import ChatQueueService
 from agentdrops.service.chat_service import ChatService
 from agentdrops.service.research_service import ResearchService
 from agentdrops.service.sessions_service import SessionsService
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.sessions = sessions
                 app.state.audit = audit
                 app.state.chat_service = ChatService(graph, sessions, audit)
+                app.state.chat_queue_service = ChatQueueService(sessions)
                 app.state.research_service = ResearchService(graph, sessions)
                 app.state.sessions_service = SessionsService(sessions)
                 yield

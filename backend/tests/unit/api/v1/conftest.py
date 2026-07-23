@@ -10,8 +10,8 @@ from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-import agentdrops.api.v1.chat as chat_module
 import agentdrops.main as main_module
+import agentdrops.worker.tasks as tasks_module
 from agentdrops.repository.sessions import SessionRecord, Status
 from tests.unit.agents.conftest import make_settings
 
@@ -178,7 +178,7 @@ def _patch_celery_and_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeDelay:
         staticmethod(lambda *_a, **_k: FakeRedis(server=shared_server, decode_responses=True)),
     )
     fake_delay = _FakeDelay()
-    monkeypatch.setattr(chat_module.run_turn_task, "delay", fake_delay)
+    monkeypatch.setattr(tasks_module.run_turn_task, "delay", fake_delay)
     return fake_delay
 
 

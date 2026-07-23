@@ -15,11 +15,10 @@ from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 
 from agentdrops.api.v1.schema import ChatQueuedResponse, ChatRequest
-from agentdrops.config.constants import CHAT_TITLE_MAX_LENGTH
 from agentdrops.jobs.events import subscribe_events
-from agentdrops.repository.sessions import SessionRecord, SessionStore
+from agentdrops.repository.sessions import SessionRecord
+from agentdrops.service.chat_queue_service import ChatQueueService
 from agentdrops.types.response import SuccessResponse
-from agentdrops.worker.tasks import run_turn_task
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +63,8 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueue
     """Enqueue one chat turn for background execution; poll GET /research/{thread_id} for the
     result, or use /chat/stream instead to observe it live."""
     thread_id = body.thread_id or str(uuid.uuid4())
-    sessions: SessionStore = request.app.state.sessions
-    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
-    run_turn_task.delay(thread_id, body.message, "chat")
+    queue: ChatQueueService = request.app.state.chat_queue_service
+    await queue.enqueue(thread_id, body.message, operation="chat")
     return SuccessResponse(data=ChatQueuedResponse(thread_id=thread_id))
 
 
@@ -88,15 +86,14 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     - `{"type": "error", "thread_id": str, "message": str}` — terminal: the run failed.
     """
     thread_id = body.thread_id or str(uuid.uuid4())
-    sessions: SessionStore = request.app.state.sessions
+    queue: ChatQueueService = request.app.state.chat_queue_service
     redis: Redis = request.app.state.redis
-    await sessions.touch(thread_id, title=body.message[:CHAT_TITLE_MAX_LENGTH])
-    run_turn_task.delay(thread_id, body.message, "chat_stream")
+    await queue.enqueue(thread_id, body.message, operation="chat_stream")
 
     async def events() -> AsyncIterator[str]:
         # The task may have already finished by the time we get here (enqueue-then-subscribe
         # race) — check the session record first rather than subscribing blind and hanging.
-        session = await sessions.get(thread_id)
+        session = await queue.get_session(thread_id)
         if session is not None and session.status in _TERMINAL_STATUSES:
             terminal = _terminal_event_from_session(thread_id, session)
             if terminal is not None:
