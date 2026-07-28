@@ -2,16 +2,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-
-async def _run_turn(
-    client: TestClient, thread_id: str, message: str, *, operation: str = "chat"
-) -> None:
-    """Directly drive `ChatService.run_turn` to simulate what the background worker does —
-    `/chat` now only enqueues a Celery task rather than executing the graph inline, so this
-    listing test populates state the same way the worker would."""
-    service = client.app.state.chat_service
-    async for _ in service.run_turn(thread_id, message, operation=operation):
-        pass
+from tests.unit.api.v1.conftest import run_turn as _run_turn
 
 
 async def test_list_sessions_returns_known_threads_newest_first(client: TestClient) -> None:

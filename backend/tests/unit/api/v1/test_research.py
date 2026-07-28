@@ -2,16 +2,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-
-async def _run_turn(
-    client: TestClient, thread_id: str, message: str, *, operation: str = "chat"
-) -> None:
-    """Directly drive `ChatService.run_turn` to simulate what the background worker does —
-    `/chat`/`/chat/stream` now only enqueue a Celery task rather than executing the graph
-    inline, so these status/report-reading tests populate state the same way the worker would."""
-    service = client.app.state.chat_service
-    async for _ in service.run_turn(thread_id, message, operation=operation):
-        pass
+from tests.unit.api.v1.conftest import run_turn as _run_turn
 
 
 def test_get_research_status_unknown_thread_returns_404(client: TestClient) -> None:

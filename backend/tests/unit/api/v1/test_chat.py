@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from typing import Any
 
 import httpx
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from agentdrops.jobs.events import publish_event
 from tests.unit.api.v1.conftest import parse_sse
+from tests.unit.api.v1.conftest import run_turn as _run_turn
 
 
 def test_chat_enqueues_and_returns_queued_immediately(client: TestClient) -> None:
@@ -126,3 +128,35 @@ async def test_chat_stream_emits_error_event_if_subscription_fails(
             "message": "connection to Redis lost",
         }
     ]
+
+
+async def test_run_turn_records_audit_row_for_clarify(client: TestClient) -> None:
+    """Restores audit-log coverage for the clarify path, deleted when execution moved off the
+    request/response cycle — `ChatService.run_turn` (now only called by the Celery worker via
+    `worker/runner.py`) is still the one place that writes this audit row."""
+    thread_id = str(uuid.uuid4())
+    await _run_turn(client, thread_id, "Research the EV charging market", operation="chat")
+
+    audit = client.app.state.audit.records
+    assert len(audit) == 1
+    assert audit[0] == {
+        "thread_id": thread_id,
+        "operation": "chat",
+        "status": "clarify",
+        "detail": {},
+    }
+
+
+async def test_run_turn_records_audit_row_for_done(client: TestClient) -> None:
+    thread_id = str(uuid.uuid4())
+    await _run_turn(client, thread_id, "Research the EV charging market", operation="chat_stream")
+    await _run_turn(client, thread_id, "Focus on the EU", operation="chat_stream")
+
+    audit = client.app.state.audit.records
+    assert len(audit) == 2
+    assert audit[1] == {
+        "thread_id": thread_id,
+        "operation": "chat_stream",
+        "status": "done",
+        "detail": {"report_chars": len("# EV Charging Market Report")},
+    }

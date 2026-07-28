@@ -199,3 +199,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
 def parse_sse(raw_text: str) -> list[dict]:
     return [json.loads(line[len("data: ") :]) for line in raw_text.splitlines() if line]
+
+
+async def run_turn(
+    client: TestClient, thread_id: str, message: str, *, operation: str = "chat"
+) -> None:
+    """Directly drive `ChatService.run_turn` to simulate what the background worker does —
+    `/chat`/`/chat/stream` now only enqueue a Celery task rather than executing the graph
+    inline, so tests that need real session/audit state populate it the same way the worker
+    would."""
+    service = client.app.state.chat_service
+    async for _ in service.run_turn(thread_id, message, operation=operation):
+        pass
