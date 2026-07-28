@@ -52,7 +52,10 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueue
         await queue.enqueue(thread_id, body.message, operation="chat")
     except Exception as exc:
         logger.exception("failed to enqueue chat turn for thread_id=%s", thread_id)
-        await queue.mark_failed(thread_id, str(exc))
+        try:
+            await queue.mark_failed(thread_id, str(exc))
+        except Exception:
+            logger.exception("failed to mark session failed for thread_id=%s", thread_id)
         raise ErrorResponse(
             BadGatewayError(message="Failed to enqueue this research turn")
         ) from exc
@@ -98,7 +101,10 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
             # client instead of leaving the SSE response hanging open with nothing ever arriving,
             # and mark the session failed so it doesn't stay wedged at "queued" forever.
             logger.exception("chat/stream failed for thread_id=%s", thread_id)
-            await queue.mark_failed(thread_id, str(exc))
+            try:
+                await queue.mark_failed(thread_id, str(exc))
+            except Exception:
+                logger.exception("failed to mark session failed for thread_id=%s", thread_id)
             yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
 
     return StreamingResponse(events(), media_type="text/event-stream")

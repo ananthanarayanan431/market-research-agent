@@ -160,6 +160,57 @@ async def test_chat_stream_emits_error_event_if_enqueue_fails_after_subscribing(
     ]
 
 
+async def test_chat_returns_502_even_if_mark_failed_itself_raises(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mark_failed` is itself a database write and can fail independently of the enqueue error
+    it's trying to record — that must not prevent the client from still getting its 502, which
+    is the whole point of the except block in `chat`."""
+
+    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+        raise RuntimeError("enqueue failed")
+
+    async def _broken_mark_failed(_thread_id: str, _error: str) -> None:
+        raise RuntimeError("mark_failed failed too")
+
+    queue = client.app.state.chat_queue_service
+    monkeypatch.setattr(queue, "enqueue", _broken_enqueue)
+    monkeypatch.setattr(queue, "mark_failed", _broken_mark_failed)
+
+    response = client.post("/v1/chat", json={"message": "Research the EV charging market"})
+
+    assert response.status_code == 502
+
+
+async def test_chat_stream_still_emits_error_event_even_if_mark_failed_itself_raises(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same concern as above, for the streaming route: if `mark_failed` raises while handling an
+    enqueue failure, the client must still get an `error` SSE event, not a silently truncated
+    stream."""
+
+    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+        raise RuntimeError("enqueue failed")
+
+    async def _broken_mark_failed(_thread_id: str, _error: str) -> None:
+        raise RuntimeError("mark_failed failed too")
+
+    queue = client.app.state.chat_queue_service
+    monkeypatch.setattr(queue, "enqueue", _broken_enqueue)
+    monkeypatch.setattr(queue, "mark_failed", _broken_mark_failed)
+
+    response = client.post("/v1/chat/stream", json={"message": "Research the EV charging market"})
+
+    events = parse_sse(response.text)
+    assert events == [
+        {
+            "type": "error",
+            "thread_id": events[0]["thread_id"],
+            "message": "enqueue failed",
+        }
+    ]
+
+
 async def test_run_turn_records_audit_row_for_clarify(client: TestClient) -> None:
     """Restores audit-log coverage for the clarify path, deleted when execution moved off the
     request/response cycle — `ChatService.run_turn` (now only called by the Celery worker via

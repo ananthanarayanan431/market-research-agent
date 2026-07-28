@@ -17,4 +17,11 @@ class ChatQueueService:
         run_turn_task.delay(thread_id, message, operation)
 
     async def mark_failed(self, thread_id: str, error: str) -> None:
+        """Mark a turn failed due to an API-side enqueue/subscribe problem (e.g. Redis or a broker
+        outage) — never overwrites a session the worker already settled (`done`/`clarifying`/
+        `failed`), since in that case the turn's own outcome is already correctly recorded and what
+        went wrong is purely our own delivery/connection problem, not the turn's result."""
+        session = await self._sessions.get(thread_id)
+        if session is not None and session.status in ("done", "clarifying", "failed"):
+            return
         await self._sessions.set_status(thread_id, "failed", error=error)

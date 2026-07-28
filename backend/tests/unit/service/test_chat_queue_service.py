@@ -72,4 +72,30 @@ async def test_mark_failed_sets_status_failed_with_error() -> None:
 
     await service.mark_failed("t1", "boom")
 
-    assert sessions.calls == [("set_status", ("t1", "failed"), {"error": "boom"})]
+    assert sessions.calls == [
+        ("get", ("t1",), {}),
+        ("set_status", ("t1", "failed"), {"error": "boom"}),
+    ]
+
+
+async def test_mark_failed_does_not_clobber_a_session_the_worker_already_settled() -> None:
+    sessions = _FakeSessionStore()
+    sessions._session.status = "done"
+    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+
+    await service.mark_failed("t1", "boom")
+
+    assert sessions.calls == [("get", ("t1",), {})]
+
+
+async def test_mark_failed_marks_a_still_in_flight_session_failed() -> None:
+    sessions = _FakeSessionStore()
+    sessions._session.status = "running"
+    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+
+    await service.mark_failed("t1", "boom")
+
+    assert sessions.calls == [
+        ("get", ("t1",), {}),
+        ("set_status", ("t1", "failed"), {"error": "boom"}),
+    ]
