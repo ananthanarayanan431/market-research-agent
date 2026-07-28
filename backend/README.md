@@ -50,6 +50,9 @@ after `docker compose up -d`, before starting the API — required in dev and in
 uvicorn agentdrops.main:app --reload --port 8000
 ```
 
+A Celery worker must also be running (`make worker`) — chat turns are enqueued by the API but
+executed entirely in the worker process, so no turn ever completes without one.
+
 - `GET /health` — liveness probe.
 - `POST /chat` — body `{"message": "...", "thread_id": "<optional, resumes a prior turn>"}`.
 

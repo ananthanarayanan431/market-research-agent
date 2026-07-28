@@ -3,7 +3,8 @@
 Backs the sidebar listing and the reopen-a-completed-run endpoints. Persisted via the ORM
 (`agentdrops.db.models.SessionTable`) against the `sessions` table
 (`db/migrations/versions/0001_create_sessions_and_audit_log.py`), so state survives a process
-restart — unlike the compiled graph's `InMemorySaver` checkpointer, which this does not touch.
+restart, independently of the compiled graph's own Postgres-backed checkpointer
+(`agents/checkpointer.py`), which this store does not touch.
 """
 
 from dataclasses import dataclass, field

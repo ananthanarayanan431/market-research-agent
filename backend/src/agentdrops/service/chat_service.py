@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 class ChatService:
     """Owns the single call site for `graph.astream`.
 
-    `run_turn` is shared by `/v1/chat` (which only keeps the terminal `clarify`/`done` event) and
-    `/v1/chat/stream` (which forwards every event to the client), so both get the same
-    source-persistence, session-status, and audit side effects instead of `/chat` silently
-    dropping the `source` events `/chat/stream` picks up.
+    `run_turn` is called by the Celery worker (`worker/runner.py::run_turn`), not directly by
+    `/v1/chat`/`/v1/chat/stream` — those routes only enqueue a task now. The worker republishes
+    every yielded event to Redis pub/sub, which `/v1/chat/stream` relays to the client and
+    `/v1/chat` (via GET /research/{thread_id}) can be polled for instead.
     """
 
     def __init__(self, graph: Any, sessions: SessionStore, audit: AuditLog) -> None:
@@ -98,8 +98,8 @@ class ChatService:
                 span.set_attribute("research.outcome", outcome)
 
     async def record_failure(self, thread_id: str, *, operation: str, error: str) -> None:
-        """Record a failed turn: session status plus an audit entry, shared by both endpoints'
-        except blocks so the failure side effects can't diverge."""
+        """Record a failed turn: session status plus an audit entry. Called by the Celery
+        worker's except block (`worker/runner.py::run_turn`), not by the routes directly."""
         await self._sessions.set_status(thread_id, "failed", error=error)
         await self._audit.record(
             thread_id, operation=operation, status="failed", detail={"error": error}
