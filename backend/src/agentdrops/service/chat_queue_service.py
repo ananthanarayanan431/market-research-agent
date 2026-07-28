@@ -14,6 +14,7 @@ class ChatQueueService:
 
     async def enqueue(self, thread_id: str, message: str, *, operation: str) -> None:
         await self._sessions.touch(thread_id, title=message[:CHAT_TITLE_MAX_LENGTH])
+        await self._sessions.set_status(thread_id, "queued")
         run_turn_task.delay(thread_id, message, operation)
 
     async def get_session(self, thread_id: str) -> SessionRecord | None:

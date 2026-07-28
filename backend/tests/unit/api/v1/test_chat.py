@@ -22,6 +22,26 @@ def test_chat_enqueues_and_returns_queued_immediately(client: TestClient) -> Non
     assert status_response.json()["data"]["status"] == "queued"
 
 
+async def test_chat_resets_a_stale_session_status_to_queued_on_a_new_turn(
+    client: TestClient,
+) -> None:
+    """Regression test: a follow-up turn on a thread left `clarifying` by a previous turn must
+    not stay `clarifying` forever — enqueue() must reset it to `queued` before the worker picks
+    up the new turn."""
+    sessions = client.app.state.sessions
+    await sessions.touch("t-reset", title="Research the EV charging market")
+    await sessions.set_status(
+        "t-reset", "clarifying", clarify_question="Which region should I focus on?"
+    )
+
+    response = client.post("/v1/chat", json={"thread_id": "t-reset", "message": "Focus on the EU"})
+
+    assert response.status_code == 200
+    session = await sessions.get("t-reset")
+    assert session is not None
+    assert session.status == "queued"
+
+
 async def test_chat_stream_reconstructs_clarify_event_if_already_clarifying(
     client: TestClient,
 ) -> None:
