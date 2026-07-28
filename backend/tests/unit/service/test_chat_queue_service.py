@@ -66,11 +66,10 @@ async def test_enqueue_dispatches_run_turn_task_with_expected_args(
     assert fake_delay.calls == [("t2", "Focus on the EU", "chat_stream")]
 
 
-async def test_get_session_delegates_to_sessions_get() -> None:
+async def test_mark_failed_sets_status_failed_with_error() -> None:
     sessions = _FakeSessionStore()
     service = ChatQueueService(sessions)  # type: ignore[arg-type]
 
-    result = await service.get_session("t1")
+    await service.mark_failed("t1", "boom")
 
-    assert result is sessions._session
-    assert sessions.calls == [("get", ("t1",), {})]
+    assert sessions.calls == [("set_status", ("t1", "failed"), {"error": "boom"})]

@@ -1,10 +1,9 @@
-"""Chat queue service: enqueues one chat turn for background execution and reconstructs the
-terminal SSE event for a session that already settled before `/chat/stream`'s subscriber
-attached. The router-facing counterpart of `ChatService`, which the Celery worker still uses to
-actually drive a turn — `api/v1/chat.py` no longer touches `SessionStore` directly."""
+"""Chat queue service: enqueues one chat turn for background execution. The router-facing
+counterpart of `ChatService`, which the Celery worker still uses to actually drive a turn —
+`api/v1/chat.py` no longer touches `SessionStore` directly."""
 
 from agentdrops.config.constants import CHAT_TITLE_MAX_LENGTH
-from agentdrops.repository.sessions import SessionRecord, SessionStore
+from agentdrops.repository.sessions import SessionStore
 from agentdrops.worker.tasks import run_turn_task
 
 
@@ -17,5 +16,5 @@ class ChatQueueService:
         await self._sessions.set_status(thread_id, "queued")
         run_turn_task.delay(thread_id, message, operation)
 
-    async def get_session(self, thread_id: str) -> SessionRecord | None:
-        return await self._sessions.get(thread_id)
+    async def mark_failed(self, thread_id: str, error: str) -> None:
+        await self._sessions.set_status(thread_id, "failed", error=error)

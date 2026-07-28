@@ -15,17 +15,20 @@ from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 
 from agentdrops.api.v1.schema import ChatQueuedResponse, ChatRequest
-from agentdrops.jobs.events import subscribe_events
-from agentdrops.repository.sessions import SessionRecord
+from agentdrops.jobs.events import consume_subscription, open_subscription
 from agentdrops.service.chat_queue_service import ChatQueueService
-from agentdrops.types.response import SuccessResponse
+from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
+from agentdrops.types.response import ErrorResponse, SuccessResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
-_TERMINAL_STATUSES = {"done", "clarifying", "failed"}
 _TERMINAL_EVENT_TYPES = {"clarify", "done", "error"}
+
+_CHAT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    status.HTTP_502_BAD_GATEWAY: fastAPIErrorResponseModels[status.HTTP_502_BAD_GATEWAY]
+}
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -33,38 +36,26 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _terminal_event_from_session(thread_id: str, session: SessionRecord) -> dict[str, Any] | None:
-    """Reconstruct the terminal SSE event from a session record already settled by the time
-    `/chat/stream` subscribes — the race window between enqueueing and subscribing."""
-    if session.status == "done":
-        return {"type": "done", "thread_id": thread_id, "report": session.report}
-    if session.status == "clarifying":
-        return {
-            "type": "clarify",
-            "thread_id": thread_id,
-            "response": session.clarify_question or "",
-        }
-    if session.status == "failed":
-        return {
-            "type": "error",
-            "thread_id": thread_id,
-            "message": session.error or "Research failed",
-        }
-    return None
-
-
 @router.post(
     "/chat",
     response_model=SuccessResponse[ChatQueuedResponse],
     status_code=status.HTTP_200_OK,
     summary="Enqueue a chat turn",
+    responses=_CHAT_ERROR_RESPONSES,
 )
 async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueuedResponse]:
     """Enqueue one chat turn for background execution; poll GET /research/{thread_id} for the
     result, or use /chat/stream instead to observe it live."""
     thread_id = body.thread_id or str(uuid.uuid4())
     queue: ChatQueueService = request.app.state.chat_queue_service
-    await queue.enqueue(thread_id, body.message, operation="chat")
+    try:
+        await queue.enqueue(thread_id, body.message, operation="chat")
+    except Exception as exc:
+        logger.exception("failed to enqueue chat turn for thread_id=%s", thread_id)
+        await queue.mark_failed(thread_id, str(exc))
+        raise ErrorResponse(
+            BadGatewayError(message="Failed to enqueue this research turn")
+        ) from exc
     return SuccessResponse(data=ChatQueuedResponse(thread_id=thread_id))
 
 
@@ -74,8 +65,9 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueue
     summary="Advance a chat turn, streamed via SSE",
 )
 async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
-    """Enqueue one chat turn, then stream its progress/source events as the worker runs it, via
-    SSE — event shapes unchanged from before this turn ran in a background worker:
+    """Subscribe to this thread's event channel, then enqueue one chat turn, streaming its
+    progress/source events as the worker runs it, via SSE — event shapes unchanged from before
+    this turn ran in a background worker:
 
     - `{"type": "progress", "step": str, "detail"?: str}` — a top-level stage started, or (from
       inside the supervisor) one delegated research topic began.
@@ -84,30 +76,29 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
       information before it can research; the turn ends here.
     - `{"type": "done", "thread_id": str, "report": str}` — terminal: the final report is ready.
     - `{"type": "error", "thread_id": str, "message": str}` — terminal: the run failed.
+
+    Subscribing *before* enqueueing (rather than after) closes the race where a fast worker
+    could publish an event before the API started listening for it — plain Redis pub/sub has no
+    replay, so a message published to nobody is lost forever.
     """
     thread_id = body.thread_id or str(uuid.uuid4())
     queue: ChatQueueService = request.app.state.chat_queue_service
     redis: Redis = request.app.state.redis
-    await queue.enqueue(thread_id, body.message, operation="chat_stream")
 
     async def events() -> AsyncIterator[str]:
-        # The task may have already finished by the time we get here (enqueue-then-subscribe
-        # race) — check the session record first rather than subscribing blind and hanging.
-        session = await queue.get_session(thread_id)
-        if session is not None and session.status in _TERMINAL_STATUSES:
-            terminal = _terminal_event_from_session(thread_id, session)
-            if terminal is not None:
-                yield _sse(terminal)
-                return
         try:
-            async for event in subscribe_events(redis, thread_id):
+            pubsub = await open_subscription(redis, thread_id)
+            await queue.enqueue(thread_id, body.message, operation="chat_stream")
+            async for event in consume_subscription(pubsub, thread_id):
                 yield _sse(event)
                 if event.get("type") in _TERMINAL_EVENT_TYPES:
                     return
         except Exception as exc:
-            # e.g. the Redis connection drops mid-stream — surface it to the client instead of
-            # letting the SSE response hang open with no further events ever arriving.
-            logger.exception("chat/stream subscription failed for thread_id=%s", thread_id)
+            # e.g. Redis is unreachable, or enqueueing the Celery task failed — surface it to the
+            # client instead of leaving the SSE response hanging open with nothing ever arriving,
+            # and mark the session failed so it doesn't stay wedged at "queued" forever.
+            logger.exception("chat/stream failed for thread_id=%s", thread_id)
+            await queue.mark_failed(thread_id, str(exc))
             yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
 
     return StreamingResponse(events(), media_type="text/event-stream")
