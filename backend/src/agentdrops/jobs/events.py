@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from redis.asyncio import Redis
@@ -18,31 +19,35 @@ async def publish_event(redis: Redis, thread_id: str, event: dict[str, Any]) -> 
     await redis.publish(_channel(thread_id), json.dumps(event))
 
 
-async def open_subscription(redis: Redis, thread_id: str) -> PubSub:
-    """Subscribe to `thread_id`'s channel and return the handle — split from `subscribe_events`
-    so a caller can subscribe *before* triggering the work that will publish to it, closing the
-    enqueue-then-subscribe race where an event published before the caller subscribes is lost
-    forever (plain Redis pub/sub has no replay)."""
+@asynccontextmanager
+async def open_subscription(redis: Redis, thread_id: str) -> AsyncIterator[PubSub]:
+    """Subscribe to `thread_id`'s channel for the duration of the context — subscribing before
+    triggering the work that will publish to it closes the enqueue-then-subscribe race where an
+    event published before the caller subscribes is lost forever (plain Redis pub/sub has no
+    replay). Owning cleanup as a context manager (rather than leaving it to the first
+    consumer of the subscription) guarantees the subscription and connection are released even
+    if the caller's block raises before ever consuming an event — e.g. if enqueueing the
+    triggering work fails."""
     pubsub = redis.pubsub()
     await pubsub.subscribe(_channel(thread_id))
-    return pubsub
-
-
-async def consume_subscription(pubsub: PubSub, thread_id: str) -> AsyncIterator[dict[str, Any]]:
-    """Yield every event received on an already-subscribed `PubSub`, until the caller stops
-    iterating or the connection drops."""
     try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            yield json.loads(message["data"])
+        yield pubsub
     finally:
         await pubsub.unsubscribe(_channel(thread_id))
         await pubsub.aclose()  # type: ignore[no-untyped-call]  # redis-py's aclose() lacks type annotations
 
 
+async def consume_subscription(pubsub: PubSub) -> AsyncIterator[dict[str, Any]]:
+    """Yield every event received on an already-subscribed `PubSub`, until the caller stops
+    iterating. Does not own the subscription's lifecycle — see `open_subscription`."""
+    async for message in pubsub.listen():
+        if message["type"] != "message":
+            continue
+        yield json.loads(message["data"])
+
+
 async def subscribe_events(redis: Redis, thread_id: str) -> AsyncIterator[dict[str, Any]]:
     """Yield every event published on `thread_id`'s channel until the caller stops iterating."""
-    pubsub = await open_subscription(redis, thread_id)
-    async for event in consume_subscription(pubsub, thread_id):
-        yield event
+    async with open_subscription(redis, thread_id) as pubsub:
+        async for event in consume_subscription(pubsub):
+            yield event

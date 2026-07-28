@@ -18,7 +18,12 @@ from agentdrops.config import Settings
 
 
 def create_engine(settings: Settings) -> AsyncEngine:
-    return create_async_engine(settings.database_url, pool_size=10, max_overflow=0)
+    # pool_pre_ping: cheap `SELECT 1` before handing out a pooled connection, so a connection
+    # dropped by the server/a proxy while idle in the pool surfaces as a transparent reconnect
+    # instead of an `OperationalError` on the next request that happens to draw it.
+    return create_async_engine(
+        settings.database_url, pool_size=10, max_overflow=0, pool_pre_ping=True
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

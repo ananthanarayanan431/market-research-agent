@@ -1,5 +1,7 @@
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -113,8 +115,10 @@ async def test_chat_stream_emits_error_event_if_subscription_fails(
     the response open with nothing ever arriving."""
     import agentdrops.api.v1.chat as chat_module
 
-    async def _broken_open_subscription(_redis: Any, _thread_id: str) -> Any:
+    @asynccontextmanager
+    async def _broken_open_subscription(_redis: Any, _thread_id: str) -> AsyncIterator[Any]:
         raise ConnectionError("connection to Redis lost")
+        yield  # pragma: no cover — makes this an async generator; never reached
 
     monkeypatch.setattr(chat_module, "open_subscription", _broken_open_subscription)
 
@@ -126,6 +130,32 @@ async def test_chat_stream_emits_error_event_if_subscription_fails(
             "type": "error",
             "thread_id": events[0]["thread_id"],
             "message": "connection to Redis lost",
+        }
+    ]
+
+
+async def test_chat_stream_emits_error_event_if_enqueue_fails_after_subscribing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enqueueing can fail (e.g. a DB error in `touch`/`set_status`, or a broker error from
+    `.delay()`) after the subscription is already open — the `async with` around
+    `open_subscription` must still let that exception propagate out to the router's own
+    error handling, not swallow it during cleanup."""
+
+    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+        raise RuntimeError("enqueue failed")
+
+    queue = client.app.state.chat_queue_service
+    monkeypatch.setattr(queue, "enqueue", _broken_enqueue)
+
+    response = client.post("/v1/chat/stream", json={"message": "Research the EV charging market"})
+
+    events = parse_sse(response.text)
+    assert events == [
+        {
+            "type": "error",
+            "thread_id": events[0]["thread_id"],
+            "message": "enqueue failed",
         }
     ]
 

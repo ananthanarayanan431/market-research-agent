@@ -87,12 +87,12 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
 
     async def events() -> AsyncIterator[str]:
         try:
-            pubsub = await open_subscription(redis, thread_id)
-            await queue.enqueue(thread_id, body.message, operation="chat_stream")
-            async for event in consume_subscription(pubsub, thread_id):
-                yield _sse(event)
-                if event.get("type") in _TERMINAL_EVENT_TYPES:
-                    return
+            async with open_subscription(redis, thread_id) as pubsub:
+                await queue.enqueue(thread_id, body.message, operation="chat_stream")
+                async for event in consume_subscription(pubsub):
+                    yield _sse(event)
+                    if event.get("type") in _TERMINAL_EVENT_TYPES:
+                        return
         except Exception as exc:
             # e.g. Redis is unreachable, or enqueueing the Celery task failed — surface it to the
             # client instead of leaving the SSE response hanging open with nothing ever arriving,

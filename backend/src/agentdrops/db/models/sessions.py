@@ -24,8 +24,14 @@ class SessionTable(Base):
         JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        sa.DateTime(timezone=True),
+        server_default=sa.text("now()"),
+        nullable=False,
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        sa.DateTime(timezone=True),
+        server_default=sa.text("now()"),
+        onupdate=sa.text("now()"),
+        nullable=False,
     )
