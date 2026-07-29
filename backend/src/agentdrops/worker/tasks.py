@@ -17,7 +17,7 @@ from agentdrops.repository.audit import AuditLog
 from agentdrops.repository.sessions import SessionStore
 from agentdrops.service.chat_service import ChatService
 from agentdrops.worker.celery_app import celery_app
-from agentdrops.worker.runner import run_turn
+from agentdrops.worker.runner import TURN_FAILED_MESSAGE, run_turn
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,9 @@ async def _execute(thread_id: str, message: str, operation: str, settings: Setti
                     thread_id, operation=operation, status="failed", detail={"error": str(exc)}
                 )
                 await publish_event(
-                    redis, thread_id, {"type": "error", "thread_id": thread_id, "message": str(exc)}
+                    redis,
+                    thread_id,
+                    {"type": "error", "thread_id": thread_id, "message": TURN_FAILED_MESSAGE},
                 )
         finally:
             await engine.dispose()

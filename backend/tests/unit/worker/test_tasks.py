@@ -16,7 +16,7 @@ from tests.unit.agents.conftest import make_settings
 
 class _FakeGraph:
     async def astream(
-        self, _inputs: dict, _config: dict, _stream_mode: list[str]
+        self, _inputs: dict, config: dict, stream_mode: list[str]
     ) -> AsyncIterator[tuple[str, dict]]:
         yield ("updates", {"final_report_generation": {"final_report": "# Report"}})
 
@@ -140,5 +140,5 @@ def test_run_turn_task_records_failure_when_resource_setup_fails(
 
     published = asyncio.run(_published())
     assert published == [
-        {"type": "error", "thread_id": "t1", "message": "Postgres unreachable"}
+        {"type": "error", "thread_id": "t1", "message": tasks_module.TURN_FAILED_MESSAGE}
     ]

@@ -3,6 +3,17 @@
 
 Date: 2026-07-21
 
+> **Implementation note (2026-07-22):** the sections below describe the originally-planned
+> `api/main.py` + `InMemorySaver` + Redis job-status-hash design. What actually shipped (see
+> `docs/superpowers/plans/2026-07-21-background-workers-redis.md`, reconciled against commits
+> `fce3b75..bc05961`) routes through the versioned `agentdrops/api/v1/` routers and a `service/`
+> layer (`ChatService`, `ChatQueueService`, `ResearchService`, `SessionsService`) instead of
+> `api/main.py`; session/status state lives in the Postgres-backed `SessionStore`
+> (`repository/sessions.py`), not a Redis job-status hash — Redis's role is narrowed to the Celery
+> broker/backend plus the pub/sub event relay. Treat "Components" and the Redis job-state schema
+> below as historical context for *why* the worker/Redis split looks the way it does, not as a
+> description of the current code.
+
 ## Problem Statement
 
 A research run (`build_market_researcher`'s compiled LangGraph) is a long-running process — a full turn spans clarification, brief-writing, multi-round supervised research fan-out, and report synthesis. Today, `/chat` and `/chat/stream` in `backend/src/agentdrops/api/main.py` drive `graph.astream` directly inside the HTTP request coroutine (`_run_graph_turn`), and all state is process-local:

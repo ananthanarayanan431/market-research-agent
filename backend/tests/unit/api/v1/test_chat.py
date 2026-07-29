@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import agentdrops.service.chat_queue_service as chat_queue_service_module
 from agentdrops.jobs.events import publish_event
 from tests.unit.api.v1.conftest import parse_sse
 from tests.unit.api.v1.conftest import run_turn as _run_turn
@@ -113,14 +114,13 @@ async def test_chat_stream_emits_error_event_if_subscription_fails(
 ) -> None:
     """A dropped Redis connection mid-subscribe must surface as an `error` SSE event, not hang
     the response open with nothing ever arriving."""
-    import agentdrops.api.v1.chat as chat_module
 
     @asynccontextmanager
     async def _broken_open_subscription(_redis: Any, _thread_id: str) -> AsyncIterator[Any]:
         raise ConnectionError("connection to Redis lost")
         yield  # pragma: no cover — makes this an async generator; never reached
 
-    monkeypatch.setattr(chat_module, "open_subscription", _broken_open_subscription)
+    monkeypatch.setattr(chat_queue_service_module, "open_subscription", _broken_open_subscription)
 
     response = client.post("/v1/chat/stream", json={"message": "Research the EV charging market"})
 
@@ -129,7 +129,7 @@ async def test_chat_stream_emits_error_event_if_subscription_fails(
         {
             "type": "error",
             "thread_id": events[0]["thread_id"],
-            "message": "connection to Redis lost",
+            "message": chat_queue_service_module._STREAM_ENQUEUE_ERROR_MESSAGE,
         }
     ]
 
@@ -155,7 +155,7 @@ async def test_chat_stream_emits_error_event_if_enqueue_fails_after_subscribing(
         {
             "type": "error",
             "thread_id": events[0]["thread_id"],
-            "message": "enqueue failed",
+            "message": chat_queue_service_module._STREAM_ENQUEUE_ERROR_MESSAGE,
         }
     ]
 
@@ -206,7 +206,7 @@ async def test_chat_stream_still_emits_error_event_even_if_mark_failed_itself_ra
         {
             "type": "error",
             "thread_id": events[0]["thread_id"],
-            "message": "enqueue failed",
+            "message": chat_queue_service_module._STREAM_ENQUEUE_ERROR_MESSAGE,
         }
     ]
 

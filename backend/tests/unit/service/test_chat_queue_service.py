@@ -42,7 +42,7 @@ async def test_enqueue_touches_and_resets_status_to_queued_before_dispatching(
     sessions = _FakeSessionStore()
     fake_delay = _FakeDelay()
     monkeypatch.setattr(chat_queue_service_module.run_turn_task, "delay", fake_delay)
-    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
 
     await service.enqueue("t1", "Research the EV charging market", operation="chat")
 
@@ -59,7 +59,7 @@ async def test_enqueue_dispatches_run_turn_task_with_expected_args(
     sessions = _FakeSessionStore()
     fake_delay = _FakeDelay()
     monkeypatch.setattr(chat_queue_service_module.run_turn_task, "delay", fake_delay)
-    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
 
     await service.enqueue("t2", "Focus on the EU", operation="chat_stream")
 
@@ -68,7 +68,7 @@ async def test_enqueue_dispatches_run_turn_task_with_expected_args(
 
 async def test_mark_failed_sets_status_failed_with_error() -> None:
     sessions = _FakeSessionStore()
-    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
 
     await service.mark_failed("t1", "boom")
 
@@ -81,7 +81,7 @@ async def test_mark_failed_sets_status_failed_with_error() -> None:
 async def test_mark_failed_does_not_clobber_a_session_the_worker_already_settled() -> None:
     sessions = _FakeSessionStore()
     sessions._session.status = "done"
-    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
 
     await service.mark_failed("t1", "boom")
 
@@ -91,7 +91,7 @@ async def test_mark_failed_does_not_clobber_a_session_the_worker_already_settled
 async def test_mark_failed_marks_a_still_in_flight_session_failed() -> None:
     sessions = _FakeSessionStore()
     sessions._session.status = "running"
-    service = ChatQueueService(sessions)  # type: ignore[arg-type]
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
 
     await service.mark_failed("t1", "boom")
 

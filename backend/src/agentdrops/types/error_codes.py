@@ -22,7 +22,7 @@ class BadRequestError(Error):
     description: str = "Bad Request"
 
 
-class EnityConflictError(Error):
+class EntityConflictError(Error):
     code: int = status.HTTP_409_CONFLICT
     description: str = "An entity conflict occurred"
 
@@ -46,7 +46,7 @@ fastAPIErrorResponseModels: dict[int | str, dict[str, Any]] = {
     status.HTTP_400_BAD_REQUEST: {"model": BadRequestError},
     status.HTTP_401_UNAUTHORIZED: {"model": UnauthorizedError},
     status.HTTP_404_NOT_FOUND: {"model": NotFoundError},
-    status.HTTP_409_CONFLICT: {"model": EnityConflictError},
+    status.HTTP_409_CONFLICT: {"model": EntityConflictError},
     status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ValidationError},
     status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": Error},
     status.HTTP_502_BAD_GATEWAY: {"model": BadGatewayError},

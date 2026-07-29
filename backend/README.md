@@ -54,7 +54,8 @@ A Celery worker must also be running (`make worker`) — chat turns are enqueued
 executed entirely in the worker process, so no turn ever completes without one.
 
 - `GET /health` — liveness probe.
-- `POST /chat` — body `{"message": "...", "thread_id": "<optional, resumes a prior turn>"}`.
+- `POST /v1/chat` — body `{"message": "...", "thread_id": "<optional, resumes a prior turn>"}`, enqueues a turn and returns immediately.
+- `POST /v1/chat/stream` — same body, streams the turn's progress/result via SSE.
 
 ## Tests
 

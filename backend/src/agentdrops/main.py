@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.sessions = sessions
                 app.state.audit = audit
                 app.state.chat_service = ChatService(graph, sessions, audit)
-                app.state.chat_queue_service = ChatQueueService(sessions)
+                app.state.chat_queue_service = ChatQueueService(sessions, redis)
                 app.state.research_service = ResearchService(graph, sessions)
                 app.state.sessions_service = SessionsService(sessions)
                 yield
@@ -114,7 +114,7 @@ async def handle_validation_error(_request: Request, exc: RequestValidationError
 @app.exception_handler(Exception)
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort handler: never leak internal exception details to the client."""
-    logger.exception("unhandled error while processing %s %s", request.method, request.url.path)
+    logger.exception("unhandled error while processing %s %r", request.method, request.url.path)
     error = Error(code=500, description="Internal Server Error")
     return JSONResponse(status_code=error.code, content=_error_content(error))
 

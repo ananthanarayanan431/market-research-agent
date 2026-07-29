@@ -1,4 +1,4 @@
-name: signoz
+name: agentdrops-observability
 networks:
   signoz-network:
     name: signoz-network

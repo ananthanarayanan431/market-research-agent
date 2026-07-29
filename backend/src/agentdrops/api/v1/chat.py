@@ -12,10 +12,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import StreamingResponse
-from redis.asyncio import Redis
 
 from agentdrops.api.v1.schema import ChatQueuedResponse, ChatRequest
-from agentdrops.jobs.events import consume_subscription, open_subscription
 from agentdrops.service.chat_queue_service import ChatQueueService
 from agentdrops.types.error_codes import BadGatewayError, fastAPIErrorResponseModels
 from agentdrops.types.response import ErrorResponse, SuccessResponse
@@ -23,8 +21,6 @@ from agentdrops.types.response import ErrorResponse, SuccessResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
-
-_TERMINAL_EVENT_TYPES = {"clarify", "done", "error"}
 
 _CHAT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status.HTTP_502_BAD_GATEWAY: fastAPIErrorResponseModels[status.HTTP_502_BAD_GATEWAY]
@@ -86,25 +82,9 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     """
     thread_id = body.thread_id or str(uuid.uuid4())
     queue: ChatQueueService = request.app.state.chat_queue_service
-    redis: Redis = request.app.state.redis
 
     async def events() -> AsyncIterator[str]:
-        try:
-            async with open_subscription(redis, thread_id) as pubsub:
-                await queue.enqueue(thread_id, body.message, operation="chat_stream")
-                async for event in consume_subscription(pubsub):
-                    yield _sse(event)
-                    if event.get("type") in _TERMINAL_EVENT_TYPES:
-                        return
-        except Exception as exc:
-            # e.g. Redis is unreachable, or enqueueing the Celery task failed — surface it to the
-            # client instead of leaving the SSE response hanging open with nothing ever arriving,
-            # and mark the session failed so it doesn't stay wedged at "queued" forever.
-            logger.exception("chat/stream failed for thread_id=%s", thread_id)
-            try:
-                await queue.mark_failed(thread_id, str(exc))
-            except Exception:
-                logger.exception("failed to mark session failed for thread_id=%s", thread_id)
-            yield _sse({"type": "error", "thread_id": thread_id, "message": str(exc)})
+        async for event in queue.stream(thread_id, body.message):
+            yield _sse(event)
 
     return StreamingResponse(events(), media_type="text/event-stream")

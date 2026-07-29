@@ -51,7 +51,7 @@ export type ApiError = {
 };
 
 /** The `{success, data}` envelope every plain-JSON REST endpoint wraps its body in. SSE events
- * on /chat/stream are a separate protocol (see StreamEvent) and are not wrapped this way. */
+ * on /v1/chat/stream are a separate protocol (see StreamEvent) and are not wrapped this way. */
 export type ApiEnvelope<T> =
   | { success: true; data: T }
   | { success: false; data: ApiError };

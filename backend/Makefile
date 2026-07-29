@@ -51,6 +51,7 @@ printf "\n$(MAGENTA)$(BOLD)==> %s$(RESET)\n" "$(1)"
 endef
 
 .PHONY: help venv install env infra-up infra-down infra-restart infra-ps infra-logs infra-reset \
+        signoz-up signoz-down signoz-open \
         run dev worker stop test test-file lint lint-fix format typecheck check clean doctor \
         db-upgrade db-downgrade db-revision db-check db-current db-history
 
@@ -134,7 +135,16 @@ db-current: ## Show the current Alembic revision applied to the database
 db-history: ## Show the full Alembic migration history
 	@$(ALEMBIC) history --verbose
 
-run: infra-up ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
+signoz-up: ## Start the SigNoz observability stack (delegates to observability/signoz/Makefile)
+	@$(MAKE) -C ../observability/signoz up
+
+signoz-down: ## Stop the SigNoz observability stack (keeps volumes)
+	@$(MAKE) -C ../observability/signoz down
+
+signoz-open: ## Open the SigNoz UI in the default browser
+	@$(MAKE) -C ../observability/signoz open
+
+run: db-upgrade ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
 	@$(call banner,Starting Agentdrops backend)
 	@$(call log_info,host=$(HOST) port=$(PORT) reload=on log-level=$(LOG_LEVEL))
 	@$(call log_info,python=$$($(PYTHON) --version 2>&1) git=$$(git rev-parse --short HEAD 2>/dev/null || echo n/a))
@@ -149,7 +159,7 @@ run: infra-up ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
 	@$(UVICORN) $(APP) --host $(HOST) --port $(PORT) --reload --log-level $(LOG_LEVEL) \
 		|| ($(call log_err,backend server exited non-zero); exit 1)
 
-worker: infra-up ## Start a Celery worker processing background research turns
+worker: db-upgrade ## Start a Celery worker processing background research turns
 	@$(call banner,Starting Agentdrops worker)
 	@$(call log_info,python=$$($(PYTHON) --version 2>&1) git=$$(git rev-parse --short HEAD 2>/dev/null || echo n/a))
 	@if [ ! -f .env ]; then \

@@ -1,6 +1,8 @@
 """Generic success/error envelope every endpoint returns, so the frontend can branch on
 `success` alone instead of guessing a response's shape from its status code."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .error_codes import Error
@@ -12,7 +14,7 @@ class Response[DataT](BaseModel):
 
 
 class SuccessResponse[DataT](Response[DataT]):
-    success: bool = True
+    success: Literal[True] = True
     data: DataT = Field(..., description="Data to return in the response of type T")
 
 

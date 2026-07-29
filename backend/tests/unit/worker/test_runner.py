@@ -5,7 +5,7 @@ from typing import Any
 from fakeredis.aioredis import FakeRedis
 
 from agentdrops.service.chat_service import ChatService
-from agentdrops.worker.runner import run_turn
+from agentdrops.worker.runner import TURN_FAILED_MESSAGE, run_turn
 
 
 class _FakeSessions:
@@ -102,9 +102,7 @@ async def test_run_turn_records_failure_and_publishes_error_on_exception() -> No
     await run_turn(chat_service, "t1", "Research the EV market", operation="chat", redis=redis)
 
     published = await _published(redis, "t1")
-    assert published == [
-        {"type": "error", "thread_id": "t1", "message": "LLM provider unavailable"}
-    ]
+    assert published == [{"type": "error", "thread_id": "t1", "message": TURN_FAILED_MESSAGE}]
     assert sessions.statuses == [("t1", "failed")]
     assert audit.records == [
         {

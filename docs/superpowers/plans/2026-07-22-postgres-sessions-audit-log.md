@@ -1,5 +1,14 @@
 # Postgres Sessions + Audit Log Implementation Plan
 
+> **Superseded (2026-07-22):** the raw-`asyncpg` architecture below (`db/pool.py`, hand-written SQL
+> in `repository/sessions.py`/`repository/audit.py`) is not what shipped. The implemented
+> architecture uses a SQLAlchemy 2.0 async ORM instead — `db/engine.py`
+> (`create_async_engine`/`async_sessionmaker`), `db/models/` (declarative `SessionTable`/
+> `AuditLogTable`/`Base`), and a `service/` layer (`ChatService`, `ResearchService`,
+> `SessionsService`) between thin `api/v1/` routers and `repository/sessions.py`/
+> `repository/audit.py`. Treat the steps below as historical context for *why* the tables look the
+> way they do, not as a description of the current code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the in-memory `SessionStore` with a Postgres-backed one and add a Postgres audit log of completed chat turns, per `docs/superpowers/specs/2026-07-21-postgres-sessions-audit-log-design.md`.

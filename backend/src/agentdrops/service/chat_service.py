@@ -99,8 +99,19 @@ class ChatService:
 
     async def record_failure(self, thread_id: str, *, operation: str, error: str) -> None:
         """Record a failed turn: session status plus an audit entry. Called by the Celery
-        worker's except block (`worker/runner.py::run_turn`), not by the routes directly."""
-        await self._sessions.set_status(thread_id, "failed", error=error)
-        await self._audit.record(
-            thread_id, operation=operation, status="failed", detail={"error": error}
-        )
+        worker's except block (`worker/runner.py::run_turn`), not by the routes directly.
+
+        Both persistence calls are best-effort and independent: the worker still needs to publish
+        its own terminal "error" event to Redis regardless of whether either write below succeeds,
+        so a failure here must not raise and prevent that from happening.
+        """
+        try:
+            await self._sessions.set_status(thread_id, "failed", error=error)
+        except Exception:
+            logger.exception("failed to set session status to failed for thread_id=%s", thread_id)
+        try:
+            await self._audit.record(
+                thread_id, operation=operation, status="failed", detail={"error": error}
+            )
+        except Exception:
+            logger.exception("failed to record failure audit entry for thread_id=%s", thread_id)
