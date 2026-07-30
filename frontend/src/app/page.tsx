@@ -32,6 +32,10 @@ export default function Home() {
   // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
   const selectionTokenRef = useRef(0);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks the clarify_question text already appended to `messages` for the current
+  // session/poll cycle, so pollUntilSettled's 3s tick doesn't re-append the same question
+  // every time it observes "clarifying" — only a genuinely new question gets a new message.
+  const lastClarifyQuestionRef = useRef<string | null>(null);
 
   const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
 
@@ -99,7 +103,15 @@ export default function Home() {
           setPhase("idle");
           return;
         }
-        setClarifySuggestions(status.status === "clarifying" ? status.clarify_suggestions : []);
+        if (status.status === "clarifying") {
+          setClarifySuggestions(status.clarify_suggestions);
+          if (status.clarify_question && status.clarify_question !== lastClarifyQuestionRef.current) {
+            lastClarifyQuestionRef.current = status.clarify_question;
+            addMessage({ id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question });
+          }
+        } else {
+          setClarifySuggestions([]);
+        }
         setPhase(status.status === "clarifying" ? "clarifying" : "running");
         pollUntilSettled(sessionId, token);
       } catch {
@@ -122,6 +134,7 @@ export default function Home() {
     setClarifySuggestions([]);
     setReport(null);
     setDrawerOpen(true);
+    lastClarifyQuestionRef.current = null;
 
     if (session.status === "done") {
       try {
@@ -143,7 +156,15 @@ export default function Home() {
       const status = await getResearchStatus(session.id);
       if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
-      setClarifySuggestions(status.status === "clarifying" ? status.clarify_suggestions : []);
+      if (status.status === "clarifying") {
+        setClarifySuggestions(status.clarify_suggestions);
+        if (status.clarify_question) {
+          lastClarifyQuestionRef.current = status.clarify_question;
+          setMessages([{ id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question }]);
+        }
+      } else {
+        setClarifySuggestions([]);
+      }
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
       if (
         status.status === "clarifying" ||
@@ -167,6 +188,7 @@ export default function Home() {
     setPhase("running");
     setDrawerMode("progress");
     setDrawerOpen(true);
+    lastClarifyQuestionRef.current = null;
   };
 
   const resetAll = () => {
@@ -182,6 +204,7 @@ export default function Home() {
     setMessages([]);
     setDrawerOpen(false);
     setDrawerMode("progress");
+    lastClarifyQuestionRef.current = null;
   };
 
   return (
