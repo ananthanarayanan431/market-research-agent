@@ -64,7 +64,7 @@ Key invariants to preserve when editing:
 
 **Persistence is Postgres-backed**: the LangGraph checkpointer (`agents/checkpointer.py`, `AsyncPostgresSaver`) and `SessionStore` (`repository/sessions.py`) both survive a process restart, and are shared between the API and the Celery worker process. Turn execution itself happens in the worker (`worker/tasks.py`), not the API process — `/chat`/`/chat/stream` enqueue a task and relay progress via Redis pub/sub (`jobs/events.py`), so `make worker` must be running alongside `make run` for turns to ever complete. `/v1/research/{thread_id}` reads status off the graph checkpoint, but `failed`/`queued` only exist in the session store.
 
-**Prompts** all live in `agents/prompts.py`; structured-output schemas in `agents/schemas.py`.
+**Prompts** each live in their own module under `agents/prompts/` (`clarify.py`, `lead_researcher.py`, etc.), re-exported from that package's `__init__.py` so call sites still do `from agentdrops.agents.prompts import X`; structured-output schemas in `agents/schemas.py`.
 
 ## Testing conventions
 
