@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
 from agentdrops.agents.research.graph import build_research_graph
@@ -46,8 +46,7 @@ async def test_research_graph_searches_then_compresses(monkeypatch: object) -> N
 async def test_research_graph_stops_at_iteration_cap(monkeypatch: object) -> None:
     llm = FakeChatModel(
         [
-            _ai_message_with_search_call("topic"),  # iteration 1
-            _ai_message_with_search_call("topic"),  # iteration 2 -> hits cap (max=2)
+            _ai_message_with_search_call("topic"),  # iteration 1 -> hits cap (max=1)
             AIMessage(content="Compressed despite still wanting to search."),
         ]
     )
@@ -68,3 +67,13 @@ async def test_research_graph_stops_at_iteration_cap(monkeypatch: object) -> Non
 
     assert result["compressed_research"] == "Compressed despite still wanting to search."
     assert result["tool_call_iterations"] == 1
+
+    # Every tool_calls message must be immediately followed by matching ToolMessages, or the
+    # real OpenAI API rejects the history -- this is what regressed before the cap fix.
+    messages = result["researcher_messages"]
+    for i, message in enumerate(messages):
+        if isinstance(message, AIMessage) and message.tool_calls:
+            expected_ids = {call["id"] for call in message.tool_calls}
+            following = messages[i + 1 : i + 1 + len(expected_ids)]
+            actual_ids = {m.tool_call_id for m in following if isinstance(m, ToolMessage)}
+            assert actual_ids == expected_ids

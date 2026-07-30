@@ -46,12 +46,17 @@ def build_research_graph(
         iterations = state.get("tool_call_iterations", 0) + 1
         return {"researcher_messages": outputs, "tool_call_iterations": iterations}
 
-    def should_continue(state: ResearcherState) -> Literal["tool_node", "compress_research"]:
-        """Keep researching while the model requested tools and the iteration cap isn't hit."""
+    def route_after_llm(state: ResearcherState) -> Literal["tool_node", "compress_research"]:
+        """Answer any requested tool calls before ever compressing -- OpenAI rejects an assistant
+        message with tool_calls that isn't immediately followed by matching ToolMessages."""
         last = state["researcher_messages"][-1]
         requested_tools = isinstance(last, AIMessage) and bool(last.tool_calls)
+        return "tool_node" if requested_tools else "compress_research"
+
+    def route_after_tools(state: ResearcherState) -> Literal["llm_call", "compress_research"]:
+        """Keep researching only while the iteration cap isn't hit."""
         under_cap = state.get("tool_call_iterations", 0) < settings.max_tool_call_iterations
-        return "tool_node" if requested_tools and under_cap else "compress_research"
+        return "llm_call" if under_cap else "compress_research"
 
     async def compress_research(state: ResearcherState) -> dict[str, object]:
         """Condense the full message trail into a single research summary for the supervisor."""
@@ -67,9 +72,13 @@ def build_research_graph(
     graph.add_edge(START, "llm_call")
     graph.add_conditional_edges(
         "llm_call",
-        should_continue,
+        route_after_llm,
         {"tool_node": "tool_node", "compress_research": "compress_research"},
     )
-    graph.add_edge("tool_node", "llm_call")
+    graph.add_conditional_edges(
+        "tool_node",
+        route_after_tools,
+        {"llm_call": "llm_call", "compress_research": "compress_research"},
+    )
     graph.add_edge("compress_research", END)
     return graph.compile()
