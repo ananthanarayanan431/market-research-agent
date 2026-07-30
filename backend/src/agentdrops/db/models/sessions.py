@@ -23,6 +23,9 @@ class SessionTable(Base):
     sources: Mapped[list[dict[str, str]]] = mapped_column(
         JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
     )
+    pinned: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         server_default=sa.text("now()"),

@@ -35,15 +35,23 @@ export default function Home() {
   const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
 
   /** Send one chat turn to /chat/stream, folding progress/source events into state as they
-   * arrive, and returning the terminal (clarify | done) event once the stream ends. */
-  const sendMessage = async (text: string): Promise<StreamEvent> =>
+   * arrive, and returning the terminal (clarify | done) event once the stream ends — or `null`
+   * if the sidebar switched to a different session before the stream finished, telling the
+   * caller to drop the result rather than append it to whatever session is now on screen. */
+  const sendMessage = async (text: string): Promise<StreamEvent | null> =>
     withSpan(
       "research.submit",
       { "research.is_followup": threadId !== null },
       async (span) => {
+        // Captured once up front: if the sidebar switches to a different session while this
+        // stream is still delivering events, selectionTokenRef.current moves on and these
+        // callbacks stop touching state — otherwise a backgrounded run's progress/source
+        // events keep landing on whatever session the user has since switched to.
+        const token = selectionTokenRef.current;
         let terminal: StreamEvent | null = null;
         let sourceCount = 0;
         await streamChat(text, threadId, (event) => {
+          if (selectionTokenRef.current !== token) return;
           if (event.type === "progress") {
             setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
           } else if (event.type === "source") {
@@ -62,7 +70,7 @@ export default function Home() {
         span.setAttribute("research.outcome", settled.type);
         span.setAttribute("research.sources", sourceCount);
         setSessionsRefresh((prev) => prev + 1);
-        return settled;
+        return selectionTokenRef.current === token ? settled : null;
       }
     );
 
@@ -175,7 +183,11 @@ export default function Home() {
       <Sidebar
         onNewResearch={resetAll}
         onSelectSession={selectSession}
+        onSessionDeleted={(id) => {
+          if (id === threadId) resetAll();
+        }}
         refreshKey={sessionsRefresh}
+        activeSessionId={threadId}
       />
       <div className="flex min-w-0 flex-1">
         <ChatPanel

@@ -125,8 +125,28 @@ class _FakeSessionStore:
     async def get(self, thread_id: str) -> SessionRecord | None:
         return self._sessions.get(thread_id)
 
-    async def list_recent(self) -> list[SessionRecord]:
-        return sorted(self._sessions.values(), key=lambda s: s.created_at, reverse=True)
+    async def list_recent(self, query: str | None = None) -> list[SessionRecord]:
+        sessions = self._sessions.values()
+        if query:
+            sessions = [s for s in sessions if query.lower() in s.title.lower()]
+        return sorted(sessions, key=lambda s: (s.pinned, s.created_at), reverse=True)
+
+    async def rename(self, thread_id: str, title: str) -> SessionRecord | None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return None
+        session.title = title
+        return session
+
+    async def set_pinned(self, thread_id: str, pinned: bool) -> SessionRecord | None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return None
+        session.pinned = pinned
+        return session
+
+    async def delete(self, thread_id: str) -> bool:
+        return self._sessions.pop(thread_id, None) is not None
 
 
 class _FakeAuditLog:

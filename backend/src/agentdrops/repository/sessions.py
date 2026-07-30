@@ -13,7 +13,7 @@ from typing import Literal
 from typing import cast as type_cast
 
 from sqlalchemy import cast as sql_cast
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import func
@@ -35,6 +35,7 @@ class SessionRecord:
     sources: list[dict[str, str]] = field(default_factory=list)
     clarify_question: str | None = None
     error: str | None = None
+    pinned: bool = False
 
 
 def _to_record(row: SessionTable) -> SessionRecord:
@@ -47,6 +48,7 @@ def _to_record(row: SessionTable) -> SessionRecord:
         sources=row.sources,
         clarify_question=row.clarify_question,
         error=row.error,
+        pinned=row.pinned,
     )
 
 
@@ -112,9 +114,49 @@ class SessionStore:
             row = await session.get(SessionTable, thread_id)
             return _to_record(row) if row is not None else None
 
-    async def list_recent(self) -> list[SessionRecord]:
+    async def list_recent(self, query: str | None = None) -> list[SessionRecord]:
+        """Pinned sessions first, then most recently started; `query` filters by title
+        (case-insensitive substring) for the sidebar's search box."""
+        async with self._session_factory() as session:
+            stmt = select(SessionTable).order_by(
+                SessionTable.pinned.desc(), SessionTable.created_at.desc()
+            )
+            if query:
+                stmt = stmt.where(SessionTable.title.ilike(f"%{query}%"))
+            result = await session.execute(stmt)
+            return [_to_record(row) for row in result.scalars().all()]
+
+    async def rename(self, thread_id: str, title: str) -> SessionRecord | None:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(SessionTable).order_by(SessionTable.created_at.desc())
+                update(SessionTable)
+                .where(SessionTable.thread_id == thread_id)
+                .values(title=title, updated_at=func.now())
+                .returning(SessionTable)
             )
-            return [_to_record(row) for row in result.scalars().all()]
+            row = result.scalar_one_or_none()
+            await session.commit()
+            return _to_record(row) if row is not None else None
+
+    async def set_pinned(self, thread_id: str, pinned: bool) -> SessionRecord | None:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                update(SessionTable)
+                .where(SessionTable.thread_id == thread_id)
+                .values(pinned=pinned, updated_at=func.now())
+                .returning(SessionTable)
+            )
+            row = result.scalar_one_or_none()
+            await session.commit()
+            return _to_record(row) if row is not None else None
+
+    async def delete(self, thread_id: str) -> bool:
+        """Remove a session row. Returns whether a row was actually deleted."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                delete(SessionTable)
+                .where(SessionTable.thread_id == thread_id)
+                .returning(SessionTable.thread_id)
+            )
+            await session.commit()
+            return result.scalar_one_or_none() is not None

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowUp, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import { CLARIFY_CHIPS, SUGGESTIONS } from "@/lib/mock-data";
 import { Message, Phase, StreamEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ export function ChatPanel({
   setTopic: (t: string) => void;
   messages: Message[];
   addMessage: (m: Message) => void;
-  sendMessage: (text: string) => Promise<StreamEvent>;
+  sendMessage: (text: string) => Promise<StreamEvent | null>;
   onStartRun: () => void;
   onOpenDrawer: () => void;
   onChooseFormat: (format: "paragraph" | "table") => void;
@@ -59,6 +59,9 @@ export function ChatPanel({
     setPhase("clarifying");
     try {
       const event = await sendMessage(text);
+      // null means the sidebar switched to a different session before this stream settled —
+      // drop the result instead of appending it to whatever session is now on screen.
+      if (!event) return;
       if (event.type === "clarify") {
         addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
       } else if (event.type === "done") {
@@ -100,6 +103,7 @@ export function ChatPanel({
     onStartRun();
     try {
       const event = await sendMessage(text);
+      if (!event) return;
       if (event.type === "clarify") {
         addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
         setPhase("clarifying");
@@ -154,7 +158,10 @@ export function ChatPanel({
       <div className="flex-1 overflow-y-auto px-6 py-8">
         {phase === "idle" && messages.length === 0 ? (
           <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 pt-16 text-center">
-            <h1 className="text-3xl font-semibold">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10">
+              <Sparkles className="h-6 w-6 text-blue-500" />
+            </div>
+            <h1 className="text-3xl font-semibold tracking-tight">
               What market should we dig into?
             </h1>
             <p className="text-muted-foreground">
@@ -167,7 +174,7 @@ export function ChatPanel({
                 <button
                   key={s}
                   onClick={() => startTopic(s)}
-                  className="rounded-lg border p-4 text-left text-sm hover:bg-accent"
+                  className="rounded-lg border p-4 text-left text-sm transition-colors hover:border-blue-500/40 hover:bg-accent"
                 >
                   {s}
                 </button>
@@ -179,7 +186,7 @@ export function ChatPanel({
             {messages.map((m) =>
               m.kind === "user" ? (
                 <div key={m.id} className="flex justify-end">
-                  <div className="max-w-[80%] rounded-xl bg-blue-500 px-4 py-2 text-sm text-white">
+                  <div className="max-w-[80%] rounded-xl bg-blue-500 px-4 py-2 text-sm text-white shadow-sm">
                     {m.text}
                   </div>
                 </div>
@@ -194,7 +201,7 @@ export function ChatPanel({
               topic && (
                 <button
                   onClick={onOpenDrawer}
-                  className="flex items-center gap-3 rounded-lg border px-4 py-3 text-left hover:bg-accent"
+                  className="flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors hover:bg-accent"
                 >
                   {phase === "running" ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
@@ -214,13 +221,13 @@ export function ChatPanel({
               <div className="flex gap-2">
                 <button
                   onClick={() => chooseFormat("paragraph")}
-                  className="rounded-md border px-4 py-2 text-sm font-medium text-blue-500 hover:bg-accent"
+                  className="rounded-md bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
                 >
                   Paragraph report
                 </button>
                 <button
                   onClick={() => chooseFormat("table")}
-                  className="rounded-md border px-4 py-2 text-sm font-medium text-blue-500 hover:bg-accent"
+                  className="rounded-md border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
                 >
                   Excel / table
                 </button>
@@ -234,9 +241,9 @@ export function ChatPanel({
                     key={chip}
                     onClick={() => toggleChip(chip)}
                     className={cn(
-                      "rounded-full border px-3 py-1.5 text-xs",
+                      "rounded-full border px-3 py-1.5 text-xs transition-colors",
                       selectedChips.includes(chip)
-                        ? "border-blue-500 text-blue-500"
+                        ? "border-blue-500 bg-blue-500/10 text-blue-500"
                         : "hover:bg-accent"
                     )}
                   >
@@ -251,7 +258,7 @@ export function ChatPanel({
       </div>
 
       <div className="border-t px-6 py-4">
-        <div className="mx-auto max-w-2xl rounded-xl border p-3">
+        <div className="mx-auto max-w-2xl rounded-xl border p-3 transition-colors focus-within:border-blue-500/40">
           <textarea
             value={phase === "clarifying" ? chipAnswer : input}
             onChange={(e) =>
@@ -289,9 +296,9 @@ export function ChatPanel({
               }}
               disabled={phase === "running" || phase === "complete" || phase === "delivered"}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-full",
+                "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
                 phase === "clarifying" || (phase === "idle" && input.trim())
-                  ? "bg-blue-500 text-white"
+                  ? "bg-blue-500 text-white hover:bg-blue-600"
                   : "bg-muted text-muted-foreground"
               )}
             >

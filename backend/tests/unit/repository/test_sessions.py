@@ -97,3 +97,76 @@ async def test_list_recent_orders_most_recent_first(
     recent = await store.list_recent()
 
     assert [s.thread_id for s in recent] == ["newer", "older"]
+
+
+async def test_list_recent_filters_by_title_query(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-ev", title="EV charging in the EU")
+    await store.touch("t-fintech", title="Fintech market in the US")
+
+    recent = await store.list_recent(query="fintech")
+
+    assert [s.thread_id for s in recent] == ["t-fintech"]
+
+
+async def test_list_recent_puts_pinned_sessions_first(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("older", title="First")
+    await store.touch("newer", title="Second")
+    await store.set_pinned("older", True)
+
+    recent = await store.list_recent()
+
+    assert [s.thread_id for s in recent] == ["older", "newer"]
+
+
+async def test_rename_updates_title(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-rename", title="Original title")
+
+    renamed = await store.rename("t-rename", "New title")
+
+    assert renamed is not None
+    assert renamed.title == "New title"
+    assert (await store.get("t-rename")).title == "New title"  # type: ignore[union-attr]
+
+
+async def test_rename_returns_none_for_unknown_thread(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    assert await SessionStore(session_factory).rename("does-not-exist", "New title") is None
+
+
+async def test_set_pinned_toggles_pinned_flag(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-pin", title="EV charging in the EU")
+
+    pinned = await store.set_pinned("t-pin", True)
+    assert pinned is not None
+    assert pinned.pinned is True
+
+    unpinned = await store.set_pinned("t-pin", False)
+    assert unpinned is not None
+    assert unpinned.pinned is False
+
+
+async def test_delete_removes_session_and_reports_it_existed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-delete", title="EV charging in the EU")
+
+    assert await store.delete("t-delete") is True
+    assert await store.get("t-delete") is None
+
+
+async def test_delete_returns_false_for_unknown_thread(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    assert await SessionStore(session_factory).delete("does-not-exist") is False

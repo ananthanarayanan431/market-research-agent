@@ -58,11 +58,47 @@ export async function streamChat(
   }
 }
 
-/** List every known research thread, most recently started first, for the sidebar. */
-export async function listSessions(): Promise<SessionSummary[]> {
-  const response = await fetch(`${API_BASE_URL}/v1/research/sessions`);
+/** List known research threads for the sidebar, pinned first then most recently started.
+ * `query` filters by title (case-insensitive substring) for the search box. */
+export async function listSessions(query?: string): Promise<SessionSummary[]> {
+  const url = new URL(`${API_BASE_URL}/v1/research/sessions`);
+  if (query) url.searchParams.set("q", query);
+  const response = await fetch(url);
   const { sessions } = await unwrap<{ sessions: SessionSummary[] }>(response);
   return sessions;
+}
+
+/** Rename a session's sidebar title. */
+export async function renameSession(threadId: string, title: string): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE_URL}/v1/research/sessions/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return unwrap<SessionSummary>(response);
+}
+
+/** Pin or unpin a session so it sorts to the top of the sidebar. */
+export async function setSessionPinned(
+  threadId: string,
+  pinned: boolean
+): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE_URL}/v1/research/sessions/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  });
+  return unwrap<SessionSummary>(response);
+}
+
+/** Permanently delete a session from the sidebar. */
+export async function deleteSession(threadId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/research/sessions/${threadId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete session ${threadId} (status ${response.status})`);
+  }
 }
 
 /** Read one thread's current status straight off the graph's checkpoint. */

@@ -28,6 +28,7 @@ export type SessionSummary = {
   title: string;
   created_at: string;
   status: ResearchStatusValue;
+  pinned: boolean;
 };
 
 export type ResearchStatus = {

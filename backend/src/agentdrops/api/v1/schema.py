@@ -45,7 +45,15 @@ class SessionSummary(BaseModel):
     title: str
     created_at: str
     status: Literal["queued", "clarifying", "running", "done", "failed"]
+    pinned: bool = False
 
 
 class SessionsResponse(BaseModel):
     sessions: list[SessionSummary]
+
+
+class UpdateSessionRequest(BaseModel):
+    """Partial update for a session: rename it, pin/unpin it, or both in one call."""
+
+    title: str | None = None
+    pinned: bool | None = None
