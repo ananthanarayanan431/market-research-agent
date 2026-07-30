@@ -177,7 +177,7 @@ export function Sidebar({
     }
   };
 
-  const groups = groupSessions(sessions);
+  const groups = useMemo(() => groupSessions(sessions), [sessions]);
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">

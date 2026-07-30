@@ -37,6 +37,18 @@ function CopyButton({ label, text }: { label: string; text: string }) {
   );
 }
 
+function ComingSoonButton({ label }: { label: string }) {
+  return (
+    <button
+      disabled
+      title="Coming soon"
+      className="cursor-not-allowed rounded-md border px-3 py-1.5 text-sm text-muted-foreground/60"
+    >
+      {label}
+    </button>
+  );
+}
+
 export function ResearchDrawer({
   title,
   mode,
@@ -187,13 +199,7 @@ function ReportView({
 
       <div className="flex gap-2 border-t pt-4">
         <CopyButton label="Copy report" text={report ?? ""} />
-        <button
-          disabled
-          title="Coming soon"
-          className="cursor-not-allowed rounded-md border px-3 py-1.5 text-sm text-muted-foreground/60"
-        >
-          Export as PDF
-        </button>
+        <ComingSoonButton label="Export as PDF" />
       </div>
     </div>
   );
@@ -242,13 +248,7 @@ function TableViewMode({ title, sources }: { title: string; sources: ResearchSou
           label="Copy table"
           text={["Topic\tFinding", ...sources.map((s) => `${s.topic}\t${s.summary}`)].join("\n")}
         />
-        <button
-          disabled
-          title="Coming soon"
-          className="cursor-not-allowed rounded-md border px-3 py-1.5 text-sm text-muted-foreground/60"
-        >
-          Export as Excel
-        </button>
+        <ComingSoonButton label="Export as Excel" />
       </div>
     </div>
   );
