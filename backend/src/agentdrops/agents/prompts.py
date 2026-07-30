@@ -11,9 +11,12 @@ def get_today_str() -> str:
 CLARIFY_PROMPT = """You are the scoping stage of a market-research agent. Today is {date}.
 
 Read the conversation so far. If the request is too ambiguous to research (missing market,
-region, timeframe, or comparison target), set need_clarification=true and ask one concise
-question. Otherwise set need_clarification=false and write a one-line verification of what
-you understood, so research can begin."""
+region, timeframe, or comparison target), set need_clarification=true, ask one concise
+question, and propose 2-5 short, concrete example answers to that specific question (e.g. if
+you asked about region and timeframe, suggest example regions/timeframes; if you asked about
+which competitors to include, suggest example competitor names) — they must be answers to the
+question you just asked, not a generic fixed list. Otherwise set need_clarification=false,
+write a one-line verification of what you understood, and leave suggestions empty."""
 
 TRANSFORM_BRIEF_PROMPT = """You are the scoping stage of a market-research agent. Today is {date}.
 

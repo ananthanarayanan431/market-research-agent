@@ -13,6 +13,12 @@ class ClarifyWithUser(BaseModel):
     verification: str = Field(
         description="Short message confirming scope, used when no clarification is needed."
     )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-5 short, concrete example answers to `question`, specific to what it "
+        "actually asks (e.g. example regions/timeframes for a scoping question, example "
+        "competitor names for a comparison question). Empty when need_clarification is false.",
+    )
 
 
 class ResearchQuestion(BaseModel):
