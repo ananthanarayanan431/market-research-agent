@@ -140,14 +140,14 @@ db-current: ## Show the current Alembic revision applied to the database
 db-history: ## Show the full Alembic migration history
 	@$(ALEMBIC) history --verbose
 
-signoz-up: ## Start the SigNoz observability stack (delegates to observability/signoz/Makefile)
-	@$(MAKE) -C ../observability/signoz up
+signoz-up: ## Start the SigNoz observability stack (delegates to signoz/Makefile)
+	@$(MAKE) -C ../signoz up
 
 signoz-down: ## Stop the SigNoz observability stack (keeps volumes)
-	@$(MAKE) -C ../observability/signoz down
+	@$(MAKE) -C ../signoz down
 
 signoz-open: ## Open the SigNoz UI in the default browser
-	@$(MAKE) -C ../observability/signoz open
+	@$(MAKE) -C ../signoz open
 
 run: db-upgrade ## Start the FastAPI backend (uvicorn --reload) on $(PORT)
 	@$(call banner,Starting Agentdrops backend)

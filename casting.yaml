@@ -3,7 +3,7 @@ kind: Installation
 metadata:
   # Renamed from `signoz`. If you already ran `foundryctl cast` under the old name, tear that
   # Installation down first (`foundryctl cast -f casting.yaml` with the old name, then remove it,
-  # or `docker compose -f observability/signoz/stack/compose.yaml down`) before casting this one —
+  # or `docker compose -f signoz/stack/compose.yaml down`) before casting this one —
   # otherwise foundryctl treats this as a brand-new Installation and the old one is orphaned.
   name: agentdrops-observability
 spec:

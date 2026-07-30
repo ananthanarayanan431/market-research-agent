@@ -2,11 +2,11 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # ── Config ────────────────────────────────────────────────────────────────
-ROOT_DIR      := $(abspath $(CURDIR)/../..)
+ROOT_DIR      := $(abspath $(CURDIR)/..)
 CASTING_FILE  ?= $(ROOT_DIR)/casting.yaml
 COMPOSE_FILE  ?= stack/compose.yaml
 
-# Two equivalent ways to run SigNoz (see observability/signoz/README.md):
+# Two equivalent ways to run SigNoz (see signoz/README.md):
 #   1. `docker compose -f stack/compose.yaml` — committed snapshot, no foundryctl needed.
 #      This is what up/down/restart/status/logs/ps use below.
 #   2. `foundryctl cast -f casting.yaml` — regenerates the snapshot from source. Only needed

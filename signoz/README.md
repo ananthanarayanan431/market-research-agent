@@ -13,7 +13,7 @@ Two equivalent ways to bring the stack up:
 foundryctl cast -f casting.yaml
 
 # 2. Plain docker compose (committed snapshot of the Foundry-generated stack, no foundryctl needed)
-docker compose -f observability/signoz/stack/compose.yaml up -d
+docker compose -f signoz/stack/compose.yaml up -d
 ```
 
 `stack/` is a committed copy of what `foundryctl cast` generates (8 services: SigNoz UI,
