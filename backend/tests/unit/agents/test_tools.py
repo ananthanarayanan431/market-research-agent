@@ -21,7 +21,11 @@ class _FakeTavily:
         return self._results
 
 
-async def test_tavily_search_adapter_formats_summarized_results() -> None:
+async def test_tavily_search_adapter_formats_summarized_results(monkeypatch: object) -> None:
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "agentdrops.agents.research.methods.get_stream_writer", lambda: lambda _payload: None
+    )
+
     results = [
         SearchResult(
             tool_name="tavily",
