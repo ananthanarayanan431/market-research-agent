@@ -3,6 +3,7 @@ in Redis so repeat page loads don't each trigger a fresh LLM call.
 """
 
 import json
+import logging
 
 from langchain_core.messages import SystemMessage
 from redis.asyncio import Redis
@@ -12,8 +13,11 @@ from agentdrops.agents.prompts import STARTER_SUGGESTIONS_PROMPT, get_today_str
 from agentdrops.agents.schemas import StarterSuggestions
 from agentdrops.config import Settings
 
+logger = logging.getLogger(__name__)
+
 _CACHE_KEY = "starter_suggestions"
 _CACHE_TTL_SECONDS = 3600
+_FAILURE_TTL_SECONDS = 60
 
 
 class SuggestionsService:
@@ -35,7 +39,12 @@ class SuggestionsService:
             StarterSuggestions
         )
         system = SystemMessage(content=STARTER_SUGGESTIONS_PROMPT.format(date=get_today_str()))
-        result = await ainvoke_with_retry(llm, [system])
+        try:
+            result = await ainvoke_with_retry(llm, [system])
+        except Exception:
+            logger.exception("starter-suggestion generation failed")
+            await self._redis.set(_CACHE_KEY, json.dumps([]), ex=_FAILURE_TTL_SECONDS)
+            return []
         assert isinstance(result, StarterSuggestions)
 
         await self._redis.set(_CACHE_KEY, json.dumps(result.prompts), ex=_CACHE_TTL_SECONDS)
