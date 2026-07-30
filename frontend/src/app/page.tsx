@@ -21,6 +21,7 @@ export default function Home() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [sources, setSources] = useState<ResearchSource[]>([]);
+  const [clarifySuggestions, setClarifySuggestions] = useState<string[]>([]);
   const [report, setReport] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("progress");
@@ -98,6 +99,7 @@ export default function Home() {
           setPhase("idle");
           return;
         }
+        setClarifySuggestions(status.status === "clarifying" ? status.clarify_suggestions : []);
         setPhase(status.status === "clarifying" ? "clarifying" : "running");
         pollUntilSettled(sessionId, token);
       } catch {
@@ -117,6 +119,7 @@ export default function Home() {
     setMessages([]);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setDrawerOpen(true);
 
@@ -140,6 +143,7 @@ export default function Home() {
       const status = await getResearchStatus(session.id);
       if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
+      setClarifySuggestions(status.status === "clarifying" ? status.clarify_suggestions : []);
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
       if (
         status.status === "clarifying" ||
@@ -158,6 +162,7 @@ export default function Home() {
     if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setPhase("running");
     setDrawerMode("progress");
@@ -172,6 +177,7 @@ export default function Home() {
     setThreadId(null);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setMessages([]);
     setDrawerOpen(false);
@@ -207,6 +213,8 @@ export default function Home() {
             setDrawerMode(format === "paragraph" ? "report" : "table");
             setDrawerOpen(true);
           }}
+          clarifySuggestions={clarifySuggestions}
+          setClarifySuggestions={setClarifySuggestions}
         />
         {drawerOpen && topic && (
           <div className="hidden w-[420px] shrink-0 md:block">

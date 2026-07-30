@@ -17,7 +17,7 @@ export type ResearchSource = {
 export type StreamEvent =
   | { type: "progress"; step: string; detail?: string }
   | { type: "source"; topic: string; summary: string }
-  | { type: "clarify"; thread_id: string; response: string }
+  | { type: "clarify"; thread_id: string; response: string; suggestions: string[] }
   | { type: "done"; thread_id: string; report: string }
   | { type: "error"; thread_id: string; message: string };
 
@@ -36,6 +36,8 @@ export type ResearchStatus = {
   status: ResearchStatusValue;
   research_brief: string | null;
   report: string | null;
+  clarify_question: string | null;
+  clarify_suggestions: string[];
 };
 
 export type ReportResponse = {

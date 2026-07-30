@@ -17,14 +17,6 @@ export const SUGGESTIONS: string[] = [
   "Market sizing for AI coding assistants",
 ];
 
-export const CLARIFY_CHIPS: string[] = [
-  "Region: Global",
-  "Region: North America",
-  "Focus: competitors",
-  "Focus: pricing",
-  "Timeframe: last 12 months",
-];
-
 export type ProgressStep = {
   title: string;
   detail?: string;

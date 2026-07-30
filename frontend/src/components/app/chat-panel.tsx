@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CheckCircle2, Loader2, Sparkles } from "lucide-react";
-import { CLARIFY_CHIPS, SUGGESTIONS } from "@/lib/mock-data";
+import { SUGGESTIONS } from "@/lib/mock-data";
 import { Message, Phase, StreamEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,8 @@ export function ChatPanel({
   onStartRun,
   onOpenDrawer,
   onChooseFormat,
+  clarifySuggestions,
+  setClarifySuggestions,
 }: {
   phase: Phase;
   setPhase: (p: Phase) => void;
@@ -28,6 +30,8 @@ export function ChatPanel({
   onStartRun: () => void;
   onOpenDrawer: () => void;
   onChooseFormat: (format: "paragraph" | "table") => void;
+  clarifySuggestions: string[];
+  setClarifySuggestions: (s: string[]) => void;
 }) {
   const [input, setInput] = useState("");
   const [chipAnswer, setChipAnswer] = useState("");
@@ -64,7 +68,9 @@ export function ChatPanel({
       if (!event) return;
       if (event.type === "clarify") {
         addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
+        setClarifySuggestions(event.suggestions);
       } else if (event.type === "done") {
+        setClarifySuggestions([]);
         addMessage({
           id: crypto.randomUUID(),
           kind: "assistant",
@@ -72,6 +78,7 @@ export function ChatPanel({
         });
         setPhase("complete");
       } else if (event.type === "error") {
+        setClarifySuggestions([]);
         addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
         setPhase("idle");
       }
@@ -106,8 +113,10 @@ export function ChatPanel({
       if (!event) return;
       if (event.type === "clarify") {
         addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
+        setClarifySuggestions(event.suggestions);
         setPhase("clarifying");
       } else if (event.type === "done") {
+        setClarifySuggestions([]);
         addMessage({
           id: crypto.randomUUID(),
           kind: "assistant",
@@ -234,9 +243,9 @@ export function ChatPanel({
               </div>
             )}
 
-            {phase === "clarifying" && (
+            {phase === "clarifying" && clarifySuggestions.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {CLARIFY_CHIPS.map((chip) => (
+                {clarifySuggestions.map((chip) => (
                   <button
                     key={chip}
                     onClick={() => toggleChip(chip)}
