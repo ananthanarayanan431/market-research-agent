@@ -71,6 +71,8 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     - `{"type": "progress", "step": str, "detail"?: str}` — a top-level stage started, or (from
       inside the supervisor) one delegated research topic began.
     - `{"type": "source", "topic": str, "summary": str}` — one delegated topic finished.
+    - `{"type": "source_url", "topic": str, "tool_name": str, "title": str, "url": str}` — one
+      individual search result was found while researching a delegated topic.
     - `{"type": "clarify", "thread_id": str, "response": str}` — terminal: the agent needs more
       information before it can research; the turn ends here.
     - `{"type": "done", "thread_id": str, "report": str}` — terminal: the final report is ready.
