@@ -12,6 +12,7 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[AnyMessage], add_messages]
     needs_clarification: bool
+    clarify_suggestions: list[str]
     research_brief: str
     supervisor_messages: Annotated[list[AnyMessage], add_messages]
     notes: Annotated[list[str], operator.add]

@@ -1,7 +1,7 @@
 """Supervisor graph: supervisor <-> supervisor_tools, fanning ConductResearch topics out."""
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
@@ -11,7 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from agentdrops.agents.llm import ainvoke_with_retry, build_llm
 from agentdrops.agents.prompts import LEAD_RESEARCHER_PROMPT, get_today_str
-from agentdrops.agents.state import SupervisorState
+from agentdrops.agents.state import ResearcherState, SupervisorState
 from agentdrops.agents.tools import ConductResearch, ResearchComplete, think_tool
 from agentdrops.config import Settings
 
@@ -46,22 +46,44 @@ def build_supervisor_graph(
         return {"supervisor_messages": [response], "research_iterations": iterations}
 
     async def run_topic(call: ToolCall) -> ToolMessage:
-        """Run the research sub-agent on one delegated topic, bounded by the concurrency cap."""
+        """Run the research sub-agent on one delegated topic, bounded by the concurrency cap.
+
+        Streamed via `astream` (not `ainvoke`) and re-emitted through this function's own
+        writer: a bare nested `ainvoke()` starts an isolated run whose `custom` writes (the
+        `source_url` events `run_search_pipeline` emits) would otherwise never reach the outer
+        `/chat/stream` consumer — the same reason the top-level `supervisor` node in
+        `agents/graph.py` streams the supervisor subgraph instead of invoking it directly.
+        """
         writer = get_stream_writer()
         topic = call["args"]["research_topic"]
         async with semaphore:
             writer({"type": "progress", "step": "researching", "detail": f"Researching: {topic}"})
-            result = await research_graph.ainvoke(
+            final_state: ResearcherState | None = None
+            async for stream_type, chunk in research_graph.astream(
                 {
                     "researcher_messages": [],
                     "research_topic": topic,
                     "tool_call_iterations": 0,
                     "compressed_research": "",
-                }
-            )
-        writer({"type": "source", "topic": topic, "summary": result["compressed_research"][:280]})
+                },
+                stream_mode=["custom", "values"],
+            ):
+                if stream_type == "custom":
+                    writer({**cast(dict[str, Any], chunk), "topic": topic})
+                else:
+                    final_state = cast(ResearcherState, chunk)
+            assert final_state is not None
+        writer(
+            {
+                "type": "source",
+                "topic": topic,
+                "summary": final_state["compressed_research"][:280],
+            }
+        )
         return ToolMessage(
-            content=result["compressed_research"], tool_call_id=call["id"], name="ConductResearch"
+            content=final_state["compressed_research"],
+            tool_call_id=call["id"],
+            name="ConductResearch",
         )
 
     async def supervisor_tools(state: SupervisorState) -> dict[str, object]:

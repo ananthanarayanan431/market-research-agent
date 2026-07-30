@@ -29,6 +29,7 @@ def build_scope_nodes(settings: Settings) -> tuple[ScopeNode, ScopeNode]:
         return {
             "messages": [AIMessage(content=reply)],
             "needs_clarification": result.need_clarification,
+            "clarify_suggestions": result.suggestions if result.need_clarification else [],
         }
 
     async def write_research_brief(state: AgentState) -> dict[str, object]:

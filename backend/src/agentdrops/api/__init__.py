@@ -1,13 +1,5 @@
-"""HTTP interface for the market-research agent (FastAPI)."""
+"""Versioned HTTP surface for the market-research agent (FastAPI routers).
 
-from typing import Any
-
-__all__ = ["app"]
-
-
-def __getattr__(name: str) -> Any:
-    if name == "app":
-        from agentdrops.api.main import app
-
-        return app
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+The app itself (lifespan, middleware, exception handlers) lives in `agentdrops.main`;
+this package holds only the versioned routers it mounts, one subpackage per version.
+"""

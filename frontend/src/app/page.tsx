@@ -1,16 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/app/sidebar";
-import { ChatPanel } from "@/components/app/chat-panel";
+import { ChatPanel, FALLBACK_STARTER_SUGGESTIONS } from "@/components/app/chat-panel";
 import { DrawerMode, ResearchDrawer } from "@/components/app/research-drawer";
-import { getResearchReport, getResearchStatus, streamChat } from "@/lib/api";
+import { getResearchReport, getResearchStatus, getStarterSuggestions, streamChat } from "@/lib/api";
 import { withSpan } from "@/lib/telemetry";
 import {
   Message,
   Phase,
   ProgressStep,
   ResearchSource,
+  ResearchStatus,
   SessionSummary,
   StreamEvent,
 } from "@/lib/types";
@@ -21,34 +22,85 @@ export default function Home() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [sources, setSources] = useState<ResearchSource[]>([]);
+  const [clarifySuggestions, setClarifySuggestions] = useState<string[]>([]);
   const [report, setReport] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("progress");
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionsRefresh, setSessionsRefresh] = useState(0);
+  const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
+    FALLBACK_STARTER_SUGGESTIONS
+  );
 
   // Bumped on every selectSession call; async work below checks it's still current before
   // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
   const selectionTokenRef = useRef(0);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks the clarify_question text already appended to `messages` for the current
+  // session/poll cycle, so pollUntilSettled's 3s tick doesn't re-append the same question
+  // every time it observes "clarifying" — only a genuinely new question gets a new message.
+  const lastClarifyQuestionRef = useRef<string | null>(null);
 
   const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
 
+  useEffect(() => {
+    let cancelled = false;
+    getStarterSuggestions()
+      .then((prompts) => {
+        if (!cancelled && prompts.length > 0) setStarterSuggestions(prompts);
+      })
+      .catch(() => {
+        // Keep the fallback list — the idle screen must never show nothing.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Apply a fetched `ResearchStatus`'s clarify fields to state: refreshes the suggestion chips,
+   * and — only when `clarify_question` is genuinely new — appends (or, for a freshly opened
+   * session, seeds) an assistant message for it. Shared by `pollUntilSettled` (which appends to
+   * the running conversation) and `selectSession` (which seeds a just-cleared one). */
+  const applyClarifyStatus = (status: ResearchStatus, seedMessages: boolean) => {
+    if (status.status !== "clarifying") {
+      setClarifySuggestions([]);
+      return;
+    }
+    setClarifySuggestions(status.clarify_suggestions);
+    if (status.clarify_question && status.clarify_question !== lastClarifyQuestionRef.current) {
+      lastClarifyQuestionRef.current = status.clarify_question;
+      const message: Message = { id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question };
+      if (seedMessages) setMessages([message]);
+      else addMessage(message);
+    }
+  };
+
   /** Send one chat turn to /chat/stream, folding progress/source events into state as they
-   * arrive, and returning the terminal (clarify | done) event once the stream ends. */
-  const sendMessage = async (text: string): Promise<StreamEvent> =>
+   * arrive, and returning the terminal (clarify | done) event once the stream ends — or `null`
+   * if the sidebar switched to a different session before the stream finished, telling the
+   * caller to drop the result rather than append it to whatever session is now on screen. */
+  const sendMessage = async (text: string): Promise<StreamEvent | null> =>
     withSpan(
       "research.submit",
       { "research.is_followup": threadId !== null },
       async (span) => {
+        // Captured once up front: if the sidebar switches to a different session while this
+        // stream is still delivering events, selectionTokenRef.current moves on and these
+        // callbacks stop touching state — otherwise a backgrounded run's progress/source
+        // events keep landing on whatever session the user has since switched to.
+        const token = selectionTokenRef.current;
         let terminal: StreamEvent | null = null;
         let sourceCount = 0;
         await streamChat(text, threadId, (event) => {
+          if (selectionTokenRef.current !== token) return;
           if (event.type === "progress") {
             setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
           } else if (event.type === "source") {
             sourceCount += 1;
             setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
+          } else if (event.type === "source_url") {
+            // Per-source URL detail isn't surfaced in the UI yet — explicitly ignored so it
+            // never falls into the terminal branch below (it has no `thread_id`).
           } else {
             setThreadId(event.thread_id);
             if (event.type === "done") setReport(event.report);
@@ -62,7 +114,7 @@ export default function Home() {
         span.setAttribute("research.outcome", settled.type);
         span.setAttribute("research.sources", sourceCount);
         setSessionsRefresh((prev) => prev + 1);
-        return settled;
+        return selectionTokenRef.current === token ? settled : null;
       }
     );
 
@@ -90,6 +142,7 @@ export default function Home() {
           setPhase("idle");
           return;
         }
+        applyClarifyStatus(status, false);
         setPhase(status.status === "clarifying" ? "clarifying" : "running");
         pollUntilSettled(sessionId, token);
       } catch {
@@ -109,8 +162,10 @@ export default function Home() {
     setMessages([]);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setDrawerOpen(true);
+    lastClarifyQuestionRef.current = null;
 
     if (session.status === "done") {
       try {
@@ -132,8 +187,13 @@ export default function Home() {
       const status = await getResearchStatus(session.id);
       if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
+      applyClarifyStatus(status, true);
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
-      if (status.status === "clarifying" || status.status === "running") {
+      if (
+        status.status === "clarifying" ||
+        status.status === "running" ||
+        status.status === "queued"
+      ) {
         pollUntilSettled(session.id, token);
       }
     } catch {
@@ -146,10 +206,12 @@ export default function Home() {
     if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setPhase("running");
     setDrawerMode("progress");
     setDrawerOpen(true);
+    lastClarifyQuestionRef.current = null;
   };
 
   const resetAll = () => {
@@ -160,10 +222,12 @@ export default function Home() {
     setThreadId(null);
     setSteps([]);
     setSources([]);
+    setClarifySuggestions([]);
     setReport(null);
     setMessages([]);
     setDrawerOpen(false);
     setDrawerMode("progress");
+    lastClarifyQuestionRef.current = null;
   };
 
   return (
@@ -171,7 +235,11 @@ export default function Home() {
       <Sidebar
         onNewResearch={resetAll}
         onSelectSession={selectSession}
+        onSessionDeleted={(id) => {
+          if (id === threadId) resetAll();
+        }}
         refreshKey={sessionsRefresh}
+        activeSessionId={threadId}
       />
       <div className="flex min-w-0 flex-1">
         <ChatPanel
@@ -191,6 +259,9 @@ export default function Home() {
             setDrawerMode(format === "paragraph" ? "report" : "table");
             setDrawerOpen(true);
           }}
+          clarifySuggestions={clarifySuggestions}
+          setClarifySuggestions={setClarifySuggestions}
+          starterSuggestions={starterSuggestions}
         />
         {drawerOpen && topic && (
           <div className="hidden w-[420px] shrink-0 md:block">
@@ -200,7 +271,7 @@ export default function Home() {
               steps={steps}
               sources={sources}
               report={report}
-              isRunning={phase === "running"}
+              isRunning={phase === "running" || phase === "clarifying"}
               onClose={() => setDrawerOpen(false)}
             />
           </div>

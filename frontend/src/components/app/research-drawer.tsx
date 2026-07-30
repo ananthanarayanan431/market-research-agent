@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckCircle2, ChevronDown, Circle, Loader2, X } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, Circle, Loader2, X } from "lucide-react";
 import { ProgressStep, ResearchSource } from "@/lib/types";
 import {
   Table,
@@ -12,6 +13,41 @@ import {
 } from "@/components/ui/table";
 
 export type DrawerMode = "progress" | "report" | "table";
+
+function CopyButton({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access denied — button just won't flip to "Copied".
+    }
+  };
+
+  return (
+    <button
+      onClick={copy}
+      className="rounded-md border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+    >
+      {copied ? "Copied!" : label}
+    </button>
+  );
+}
+
+function ComingSoonButton({ label }: { label: string }) {
+  return (
+    <button
+      disabled
+      title="Coming soon"
+      className="cursor-not-allowed rounded-md border px-3 py-1.5 text-sm text-muted-foreground/60"
+    >
+      {label}
+    </button>
+  );
+}
 
 export function ResearchDrawer({
   title,
@@ -33,23 +69,23 @@ export function ResearchDrawer({
   return (
     <div className="flex h-full w-full flex-col border-l bg-card">
       <div className="flex items-center justify-between border-b px-5 py-3">
-        <div className="truncate text-sm font-semibold">
-          {mode === "progress" ? title : `Deep Research: ${title}`}
-        </div>
-        <div className="flex items-center gap-3">
-          {mode !== "progress" && (
-            <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-              Show thinking
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
+        <div className="flex min-w-0 items-center gap-2">
+          {isRunning ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+          ) : (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
           )}
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="truncate text-sm font-semibold">
+            {mode === "progress" ? title : `Deep Research: ${title}`}
+          </div>
         </div>
+        <button
+          onClick={onClose}
+          aria-label="Close research panel"
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-5">
@@ -102,7 +138,7 @@ function ProgressView({
         })}
         {steps.length === 0 && (
           <li className="flex gap-2">
-            <Circle className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
+            <Circle className="mt-1 h-3.5 w-3.5 shrink-0 animate-pulse text-muted-foreground/40" />
             <div className="text-sm text-muted-foreground">Waiting to start...</div>
           </li>
         )}
@@ -117,7 +153,7 @@ function ProgressView({
             {sources.map((s, i) => (
               <div
                 key={`${s.topic}-${i}`}
-                className="flex items-start gap-2 rounded-md border p-2"
+                className="flex items-start gap-2 rounded-md border p-2 transition-colors hover:bg-accent/50"
               >
                 <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold">
                   {s.topic.charAt(0).toUpperCase()}
@@ -162,12 +198,8 @@ function ReportView({
       </div>
 
       <div className="flex gap-2 border-t pt-4">
-        <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">
-          Copy report
-        </button>
-        <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">
-          Export as PDF
-        </button>
+        <CopyButton label="Copy report" text={report ?? ""} />
+        <ComingSoonButton label="Export as PDF" />
       </div>
     </div>
   );
@@ -212,12 +244,11 @@ function TableViewMode({ title, sources }: { title: string; sources: ResearchSou
       )}
 
       <div className="flex gap-2 border-t pt-4">
-        <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">
-          Copy table
-        </button>
-        <button className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">
-          Export as Excel
-        </button>
+        <CopyButton
+          label="Copy table"
+          text={["Topic\tFinding", ...sources.map((s) => `${s.topic}\t${s.summary}`)].join("\n")}
+        />
+        <ComingSoonButton label="Export as Excel" />
       </div>
     </div>
   );

@@ -7,7 +7,14 @@ from tests.unit.agents.conftest import FakeChatModel, make_settings
 
 async def test_clarify_with_user_asks_when_ambiguous(monkeypatch: object) -> None:
     llm = FakeChatModel(
-        [ClarifyWithUser(need_clarification=True, question="Which region?", verification="")]
+        [
+            ClarifyWithUser(
+                need_clarification=True,
+                question="Which region?",
+                verification="",
+                suggestions=["North America", "Global", "EU only"],
+            )
+        ]
     )
     monkeypatch.setattr(  # type: ignore[attr-defined]
         "agentdrops.agents.scope.graph.build_llm", lambda settings, **kw: llm
@@ -18,12 +25,17 @@ async def test_clarify_with_user_asks_when_ambiguous(monkeypatch: object) -> Non
 
     assert result["needs_clarification"] is True
     assert result["messages"][0].content == "Which region?"
+    assert result["clarify_suggestions"] == ["North America", "Global", "EU only"]
     assert route_after_clarify({"needs_clarification": True}) == "__end__"
 
 
 async def test_clarify_with_user_continues_when_clear(monkeypatch: object) -> None:
     llm = FakeChatModel(
-        [ClarifyWithUser(need_clarification=False, question="", verification="Got it.")]
+        [
+            ClarifyWithUser(
+                need_clarification=False, question="", verification="Got it.", suggestions=[]
+            )
+        ]
     )
     monkeypatch.setattr(  # type: ignore[attr-defined]
         "agentdrops.agents.scope.graph.build_llm", lambda settings, **kw: llm
@@ -35,6 +47,7 @@ async def test_clarify_with_user_continues_when_clear(monkeypatch: object) -> No
     )
 
     assert result["needs_clarification"] is False
+    assert result["clarify_suggestions"] == []
     assert route_after_clarify(result) == "write_research_brief"
 
 

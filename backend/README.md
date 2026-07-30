@@ -35,14 +35,27 @@ docker compose up -d
 Starts postgres (5432), redis (6379), minio (9000, console 9001) with creds matching
 `.env.example` defaults.
 
+## Migrations
+
+```bash
+alembic upgrade head
+```
+
+Creates the `sessions` and `audit_log` tables (see `src/agentdrops/db/migrations/`). Run once
+after `docker compose up -d`, before starting the API — required in dev and in any deploy.
+
 ## Run
 
 ```bash
-uvicorn agentdrops.api.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8000
 ```
 
+A Celery worker must also be running (`make worker`) — chat turns are enqueued by the API but
+executed entirely in the worker process, so no turn ever completes without one.
+
 - `GET /health` — liveness probe.
-- `POST /chat` — body `{"message": "...", "thread_id": "<optional, resumes a prior turn>"}`.
+- `POST /v1/chat` — body `{"message": "...", "thread_id": "<optional, resumes a prior turn>"}`, enqueues a turn and returns immediately.
+- `POST /v1/chat/stream` — same body, streams the turn's progress/result via SSE.
 
 ## Tests
 

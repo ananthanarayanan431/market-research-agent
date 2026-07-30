@@ -1,0 +1,243 @@
+import json
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+
+import agentdrops.main as main_module
+import agentdrops.worker.tasks as tasks_module
+from agentdrops.repository.sessions import SessionRecord, Status
+from tests.unit.agents.conftest import make_settings
+
+
+class _StateSnapshot:
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.values = values
+
+
+class _FakeGraph:
+    """Fake compiled graph: first turn per thread asks a clarification, second turn reports."""
+
+    def __init__(self) -> None:
+        self._turns: dict[str, int] = {}
+        self._values: dict[str, dict[str, Any]] = {}
+
+    async def astream(
+        self, _inputs: dict, config: dict, stream_mode: list[str]
+    ) -> AsyncIterator[tuple[str, dict]]:
+        thread_id = config["configurable"]["thread_id"]
+        turn = self._turns.get(thread_id, 0) + 1
+        self._turns[thread_id] = turn
+        state = self._values.setdefault(thread_id, {})
+        if turn == 1:
+            update = {
+                "needs_clarification": True,
+                "messages": [AIMessage(content="Which region should I focus on?")],
+                "clarify_suggestions": ["North America", "Global", "EU only"],
+            }
+            state.update(update)
+            yield ("updates", {"clarify_with_user": update})
+            return
+        state.update({"needs_clarification": False})
+        yield (
+            "updates",
+            {"clarify_with_user": {"needs_clarification": False, "messages": []}},
+        )
+        yield ("updates", {"write_research_brief": {}})
+        yield ("custom", {"type": "progress", "step": "researching", "detail": "Researching: EU"})
+        yield ("custom", {"type": "source", "topic": "EU", "summary": "EU findings"})
+        yield ("updates", {"supervisor": {}})
+        report = "# EV Charging Market Report"
+        state.update({"final_report": report})
+        yield ("updates", {"final_report_generation": {"final_report": report}})
+
+    async def aget_state(self, config: dict) -> _StateSnapshot:
+        thread_id = config["configurable"]["thread_id"]
+        return _StateSnapshot(self._values.get(thread_id, {}))
+
+
+class _FakeEngine:
+    """App startup needs an engine object; these route tests never touch a real database."""
+
+    async def dispose(self) -> None:
+        return None
+
+
+class _FakeCheckpointer:
+    pass
+
+
+@asynccontextmanager
+async def _fake_checkpointer(_settings: object) -> AsyncIterator[_FakeCheckpointer]:
+    yield _FakeCheckpointer()
+
+
+def _fake_create_engine(_settings: object) -> _FakeEngine:
+    return _FakeEngine()
+
+
+def _fake_create_session_factory(_engine: object) -> object:
+    return object()
+
+
+class _FakeSessionStore:
+    """In-memory stand-in for the Postgres-backed `SessionStore`, same async interface."""
+
+    def __init__(self, _session_factory: object) -> None:
+        self._sessions: dict[str, SessionRecord] = {}
+
+    async def touch(self, thread_id: str, *, title: str) -> SessionRecord:
+        return self._sessions.setdefault(
+            thread_id,
+            SessionRecord(thread_id=thread_id, title=title, created_at=datetime.now(UTC)),
+        )
+
+    async def set_status(
+        self,
+        thread_id: str,
+        status: Status,
+        *,
+        report: str | None = None,
+        clarify_question: str | None = None,
+        clarify_suggestions: list[str] | None = None,
+        error: str | None = None,
+    ) -> None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return
+        session.status = status
+        if report is not None:
+            session.report = report
+        if clarify_question is not None:
+            session.clarify_question = clarify_question
+        if clarify_suggestions is not None:
+            session.clarify_suggestions = clarify_suggestions
+        if error is not None:
+            session.error = error
+
+    async def add_source(self, thread_id: str, topic: str, summary: str) -> None:
+        session = self._sessions.get(thread_id)
+        if session is not None:
+            session.sources.append({"topic": topic, "summary": summary})
+
+    async def get(self, thread_id: str) -> SessionRecord | None:
+        return self._sessions.get(thread_id)
+
+    async def list_recent(self, query: str | None = None) -> list[SessionRecord]:
+        sessions = self._sessions.values()
+        if query:
+            sessions = [s for s in sessions if query.lower() in s.title.lower()]
+        return sorted(sessions, key=lambda s: (s.pinned, s.created_at), reverse=True)
+
+    async def rename(self, thread_id: str, title: str) -> SessionRecord | None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return None
+        session.title = title
+        return session
+
+    async def set_pinned(self, thread_id: str, pinned: bool) -> SessionRecord | None:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return None
+        session.pinned = pinned
+        return session
+
+    async def delete(self, thread_id: str) -> str:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return "not_found"
+        if session.status in ("queued", "running"):
+            return "in_progress"
+        del self._sessions[thread_id]
+        return "deleted"
+
+
+class _FakeAuditLog:
+    def __init__(self, _session_factory: object) -> None:
+        self.records: list[dict[str, object]] = []
+
+    async def record(
+        self,
+        thread_id: str,
+        *,
+        operation: str,
+        status: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        self.records.append(
+            {
+                "thread_id": thread_id,
+                "operation": operation,
+                "status": status,
+                "detail": detail or {},
+            }
+        )
+
+
+def _patch_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_module, "create_engine", _fake_create_engine)
+    monkeypatch.setattr(main_module, "create_session_factory", _fake_create_session_factory)
+    monkeypatch.setattr(main_module, "SessionStore", _FakeSessionStore)
+    monkeypatch.setattr(main_module, "AuditLog", _FakeAuditLog)
+    monkeypatch.setattr(main_module, "checkpointer", _fake_checkpointer)
+
+
+class _FakeDelay:
+    """Stand-in for Celery's `.delay(...)`: records calls instead of touching a real broker."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, thread_id: str, message: str, operation: str) -> None:
+        self.calls.append((thread_id, message, operation))
+
+
+def _patch_celery_and_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeDelay:
+    monkeypatch.setattr(main_module, "configure_celery", lambda settings: None)
+    shared_server = FakeServer()
+    monkeypatch.setattr(
+        main_module.Redis,
+        "from_url",
+        staticmethod(lambda *_a, **_k: FakeRedis(server=shared_server, decode_responses=True)),
+    )
+    fake_delay = _FakeDelay()
+    monkeypatch.setattr(tasks_module.run_turn_task, "delay", fake_delay)
+    return fake_delay
+
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(
+        main_module,
+        "build_market_researcher",
+        lambda settings, client, checkpointer: _FakeGraph(),
+    )
+    _patch_db(monkeypatch)
+    fake_delay = _patch_celery_and_redis(monkeypatch)
+    with TestClient(main_module.app) as test_client:
+        test_client.fake_delay = fake_delay  # type: ignore[attr-defined]
+        yield test_client
+
+
+def parse_sse(raw_text: str) -> list[dict]:
+    return [json.loads(line[len("data: ") :]) for line in raw_text.splitlines() if line]
+
+
+async def run_turn(
+    client: TestClient, thread_id: str, message: str, *, operation: str = "chat"
+) -> None:
+    """Directly drive `ChatService.run_turn` to simulate what the background worker does —
+    `/chat`/`/chat/stream` now only enqueue a Celery task rather than executing the graph
+    inline, so tests that need real session/audit state populate it the same way the worker
+    would."""
+    service = client.app.state.chat_service
+    async for _ in service.run_turn(thread_id, message, operation=operation):
+        pass

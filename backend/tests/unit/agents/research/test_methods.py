@@ -57,7 +57,11 @@ def test_format_search_output_handles_no_results() -> None:
     assert format_search_output([]) == "No results found."
 
 
-async def test_run_search_pipeline_dedupes_and_formats() -> None:
+async def test_run_search_pipeline_dedupes_and_formats(monkeypatch: object) -> None:
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "agentdrops.agents.research.methods.get_stream_writer", lambda: lambda _payload: None
+    )
+
     class _FakeTool:
         name = "fake"
 
@@ -70,3 +74,30 @@ async def test_run_search_pipeline_dedupes_and_formats() -> None:
 
     assert output.count("SOURCE") == 1
     assert "only once" in output
+
+
+async def test_run_search_pipeline_emits_source_url_per_deduped_result(monkeypatch: object) -> None:
+    class _FakeTool:
+        name = "fake"
+
+        async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+            return [
+                _result("https://a.com", title="A"),
+                _result("https://a.com", title="A dup"),
+                _result("https://b.com", title="B"),
+            ]
+
+    writes: list[dict[str, str]] = []
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        "agentdrops.agents.research.methods.get_stream_writer", lambda: writes.append
+    )
+    llm = FakeChatModel(
+        [Summary(summary="s1", key_excerpts=""), Summary(summary="s2", key_excerpts="")]
+    )
+
+    await run_search_pipeline(_FakeTool(), llm, "query", 5)  # type: ignore[arg-type]
+
+    assert writes == [
+        {"type": "source_url", "tool_name": "tavily", "title": "A", "url": "https://a.com"},
+        {"type": "source_url", "tool_name": "tavily", "title": "B", "url": "https://b.com"},
+    ]
