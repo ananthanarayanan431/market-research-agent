@@ -62,8 +62,12 @@ class ChatService:
                             "needs_clarification"
                         ):
                             question = str(node_output["messages"][-1].content)
+                            suggestions = list(node_output.get("clarify_suggestions", []))
                             await self._sessions.set_status(
-                                thread_id, "clarifying", clarify_question=question
+                                thread_id,
+                                "clarifying",
+                                clarify_question=question,
+                                clarify_suggestions=suggestions,
                             )
                             outcome = "clarify"
                             await self._audit.record(
@@ -73,6 +77,7 @@ class ChatService:
                                 "type": "clarify",
                                 "thread_id": thread_id,
                                 "response": question,
+                                "suggestions": suggestions,
                             }
                             return
                         if node_name == "final_report_generation":

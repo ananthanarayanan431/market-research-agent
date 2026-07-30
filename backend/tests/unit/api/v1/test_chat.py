@@ -228,6 +228,20 @@ async def test_run_turn_records_audit_row_for_clarify(client: TestClient) -> Non
     }
 
 
+async def test_run_turn_clarify_event_includes_suggestions(client: TestClient) -> None:
+    thread_id = str(uuid.uuid4())
+    events = []
+    service = client.app.state.chat_service
+    async for event in service.run_turn(
+        thread_id, "Research the EV charging market", operation="chat"
+    ):
+        events.append(event)
+
+    clarify_events = [e for e in events if e["type"] == "clarify"]
+    assert len(clarify_events) == 1
+    assert clarify_events[0]["suggestions"] == ["North America", "Global", "EU only"]
+
+
 async def test_run_turn_records_audit_row_for_done(client: TestClient) -> None:
     thread_id = str(uuid.uuid4())
     await _run_turn(client, thread_id, "Research the EV charging market", operation="chat_stream")

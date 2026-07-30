@@ -39,6 +39,7 @@ class _FakeGraph:
             update = {
                 "needs_clarification": True,
                 "messages": [AIMessage(content="Which region should I focus on?")],
+                "clarify_suggestions": ["North America", "Global", "EU only"],
             }
             state.update(update)
             yield ("updates", {"clarify_with_user": update})

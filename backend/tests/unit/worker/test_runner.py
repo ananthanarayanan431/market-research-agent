@@ -88,7 +88,12 @@ async def test_run_turn_publishes_every_event_from_chat_service() -> None:
 
     published = await _published(redis, "t1")
     assert published == [
-        {"type": "clarify", "thread_id": "t1", "response": "Which region should I focus on?"}
+        {
+            "type": "clarify",
+            "thread_id": "t1",
+            "response": "Which region should I focus on?",
+            "suggestions": [],
+        }
     ]
     assert sessions.statuses == [("t1", "clarifying")]
 
