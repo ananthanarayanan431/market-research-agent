@@ -1,8 +1,11 @@
 """Integration tests for `SessionStore` against a real Postgres — see conftest.py for the
 auto-skip-if-unreachable `session_factory` fixture."""
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentdrops.db.models import AuditLogTable
+from agentdrops.repository.audit import AuditLog
 from agentdrops.repository.sessions import SessionStore
 
 
@@ -117,6 +120,32 @@ async def test_list_recent_filters_by_title_query(
     assert [s.thread_id for s in recent] == ["t-fintech"]
 
 
+async def test_list_recent_treats_literal_percent_in_query_as_literal(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-percent", title="Q3 growth is up 50% YoY")
+    # Same "50" substring, no literal "%" — an unescaped search would treat the query's own "%"
+    # as a wildcard and match this too; escaping should exclude it.
+    await store.touch("t-no-percent", title="Q3 growth is up 50X YoY")
+
+    recent = await store.list_recent(query="50%")
+
+    assert [s.thread_id for s in recent] == ["t-percent"]
+
+
+async def test_list_recent_treats_literal_underscore_in_query_as_literal(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-underscore", title="internal_codename project")
+    await store.touch("t-other", title="internalXcodename project")
+
+    recent = await store.list_recent(query="internal_codename")
+
+    assert [s.thread_id for s in recent] == ["t-underscore"]
+
+
 async def test_list_recent_puts_pinned_sessions_first(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -199,3 +228,43 @@ async def test_delete_refuses_a_running_session(
 
     assert await store.delete("t-running-delete") == "in_progress"
     assert await store.get("t-running-delete") is not None
+
+
+async def test_delete_cascades_to_the_session_s_audit_log_rows(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """`audit_log.thread_id` has `ondelete="CASCADE"` (see `db/models/audit_log.py`) specifically
+    so deleting a session doesn't leave orphaned audit rows behind, or fail with a foreign-key
+    violation because deletion is blocked by rows that reference it. This is the retention policy:
+    a deleted session's audit trail is deleted with it, not retained independently."""
+    store = SessionStore(session_factory)
+    audit = AuditLog(session_factory)
+    await store.touch("t-delete-audit", title="EV charging in the EU")
+    await store.set_status("t-delete-audit", "done", report="# Report")
+    await audit.record("t-delete-audit", operation="chat", status="done")
+
+    async with session_factory() as session:
+        rows_before = (
+            (
+                await session.execute(
+                    select(AuditLogTable).where(AuditLogTable.thread_id == "t-delete-audit")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows_before) == 1
+
+    assert await store.delete("t-delete-audit") == "deleted"
+
+    async with session_factory() as session:
+        rows_after = (
+            (
+                await session.execute(
+                    select(AuditLogTable).where(AuditLogTable.thread_id == "t-delete-audit")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rows_after == []

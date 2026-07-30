@@ -1,6 +1,6 @@
 """Structured-output contracts the LLM is forced to emit at specific pipeline stages."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ClarifyWithUser(BaseModel):
@@ -19,6 +19,21 @@ class ClarifyWithUser(BaseModel):
         "actually asks (e.g. example regions/timeframes for a scoping question, example "
         "competitor names for a comparison question). Empty when need_clarification is false.",
     )
+
+    @model_validator(mode="after")
+    def _check_suggestions_match_need_clarification(self) -> "ClarifyWithUser":
+        """`min_length`/`max_length` on the field itself can't express this: the valid range for
+        `suggestions` depends on `need_clarification` (empty vs. 2-5 items), so it's enforced
+        here instead of as a static Field constraint that would reject one of the two valid
+        shapes."""
+        if self.need_clarification:
+            if not 2 <= len(self.suggestions) <= 5:
+                raise ValueError(
+                    "suggestions must contain 2-5 items when need_clarification is true"
+                )
+        elif self.suggestions:
+            raise ValueError("suggestions must be empty when need_clarification is false")
+        return self
 
 
 class ResearchQuestion(BaseModel):
@@ -60,6 +75,8 @@ class StarterSuggestions(BaseModel):
     """Example research prompts shown on the idle chat state, before the user has typed anything."""
 
     prompts: list[str] = Field(
+        min_length=3,
+        max_length=3,
         description="3 short, varied example market-research prompts a user might submit — "
-        "different industries/markets each time, one sentence each."
+        "different industries/markets each time, one sentence each.",
     )

@@ -2,11 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CheckCircle2, Loader2, Sparkles } from "lucide-react";
-import { getStarterSuggestions } from "@/lib/api";
 import { Message, Phase, StreamEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const FALLBACK_STARTER_SUGGESTIONS = [
+export const FALLBACK_STARTER_SUGGESTIONS = [
   "Competitive landscape for enterprise SaaS in fintech",
   "Consumer trends in plant-based foods, US market",
   "Market sizing for AI coding assistants",
@@ -25,6 +24,7 @@ export function ChatPanel({
   onChooseFormat,
   clarifySuggestions,
   setClarifySuggestions,
+  starterSuggestions,
 }: {
   phase: Phase;
   setPhase: (p: Phase) => void;
@@ -38,6 +38,7 @@ export function ChatPanel({
   onChooseFormat: (format: "paragraph" | "table") => void;
   clarifySuggestions: string[];
   setClarifySuggestions: (s: string[]) => void;
+  starterSuggestions: string[];
 }) {
   const [input, setInput] = useState("");
   const [chipAnswer, setChipAnswer] = useState("");
@@ -51,24 +52,6 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase]);
 
-  const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
-    FALLBACK_STARTER_SUGGESTIONS
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    getStarterSuggestions()
-      .then((prompts) => {
-        if (!cancelled && prompts.length > 0) setStarterSuggestions(prompts);
-      })
-      .catch(() => {
-        // Keep the fallback list — the idle screen must never show nothing.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // `deliveryChosen` is scoped to one research run: reset it whenever the active topic changes
   // (a new topic, or a different session reopened from the sidebar), otherwise the format
   // buttons stay hidden on every run after the first. Reset during render (not an effect) per
@@ -78,6 +61,32 @@ export function ChatPanel({
     setPrevTopic(topic);
     setDeliveryChosen(null);
   }
+
+  /** Apply a settled `clarify | done | error` stream event to messages/suggestions/phase.
+   * Shared by `startTopic` and `submitClarify`, which only differ in which phase to fall back
+   * to on `clarify`/`error` (the former is already "clarifying"; the latter returns to it). */
+  const applyTerminalEvent = (
+    event: StreamEvent,
+    { clarifyPhase, errorPhase }: { clarifyPhase: Phase; errorPhase: Phase }
+  ) => {
+    if (event.type === "clarify") {
+      addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
+      setClarifySuggestions(event.suggestions);
+      setPhase(clarifyPhase);
+    } else if (event.type === "done") {
+      setClarifySuggestions([]);
+      addMessage({
+        id: crypto.randomUUID(),
+        kind: "assistant",
+        text: "Research complete. How would you like the findings delivered?",
+      });
+      setPhase("complete");
+    } else if (event.type === "error") {
+      setClarifySuggestions([]);
+      addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
+      setPhase(errorPhase);
+    }
+  };
 
   const startTopic = async (text: string) => {
     if (!text.trim()) return;
@@ -90,22 +99,7 @@ export function ChatPanel({
       // null means the sidebar switched to a different session before this stream settled —
       // drop the result instead of appending it to whatever session is now on screen.
       if (!event) return;
-      if (event.type === "clarify") {
-        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
-        setClarifySuggestions(event.suggestions);
-      } else if (event.type === "done") {
-        setClarifySuggestions([]);
-        addMessage({
-          id: crypto.randomUUID(),
-          kind: "assistant",
-          text: "Research complete. How would you like the findings delivered?",
-        });
-        setPhase("complete");
-      } else if (event.type === "error") {
-        setClarifySuggestions([]);
-        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
-        setPhase("idle");
-      }
+      applyTerminalEvent(event, { clarifyPhase: "clarifying", errorPhase: "idle" });
     } catch {
       addMessage({
         id: crypto.randomUUID(),
@@ -135,22 +129,7 @@ export function ChatPanel({
     try {
       const event = await sendMessage(text);
       if (!event) return;
-      if (event.type === "clarify") {
-        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: event.response });
-        setClarifySuggestions(event.suggestions);
-        setPhase("clarifying");
-      } else if (event.type === "done") {
-        setClarifySuggestions([]);
-        addMessage({
-          id: crypto.randomUUID(),
-          kind: "assistant",
-          text: "Research complete. How would you like the findings delivered?",
-        });
-        setPhase("complete");
-      } else if (event.type === "error") {
-        addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
-        setPhase("clarifying");
-      }
+      applyTerminalEvent(event, { clarifyPhase: "clarifying", errorPhase: "clarifying" });
     } catch {
       addMessage({
         id: crypto.randomUUID(),

@@ -69,6 +69,7 @@ export function ResearchDrawer({
         </div>
         <button
           onClick={onClose}
+          aria-label="Close research panel"
           className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <X className="h-4 w-4" />

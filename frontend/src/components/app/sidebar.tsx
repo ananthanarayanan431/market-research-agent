@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Check,
@@ -27,8 +27,12 @@ import { cn } from "@/lib/utils";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+function msSince(iso: string): number {
+  return Date.now() - new Date(iso).getTime();
+}
+
 function timeAgo(iso: string): string {
-  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  const minutes = Math.floor(msSince(iso) / 60_000);
   if (minutes < 1) return "Just now";
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
@@ -38,22 +42,23 @@ function timeAgo(iso: string): string {
 
 type Group = { label: string; items: SessionSummary[] };
 
+const RECENCY_BUCKETS = ["Today", "Yesterday", "Previous 7 Days", "Older"] as const;
+
 /** Buckets non-pinned sessions by recency (Today / Yesterday / Previous 7 Days / Older);
  * pinned sessions always form their own group at the top regardless of age. */
 function groupSessions(sessions: SessionSummary[]): Group[] {
   const pinned = sessions.filter((s) => s.pinned);
   const rest = sessions.filter((s) => !s.pinned);
 
-  const now = Date.now();
   const dayMs = 86_400_000;
-  const buckets: Record<string, SessionSummary[]> = {
+  const buckets: Record<(typeof RECENCY_BUCKETS)[number], SessionSummary[]> = {
     Today: [],
     Yesterday: [],
     "Previous 7 Days": [],
     Older: [],
   };
   for (const s of rest) {
-    const ageDays = Math.floor((now - new Date(s.created_at).getTime()) / dayMs);
+    const ageDays = Math.floor(msSince(s.created_at) / dayMs);
     if (ageDays < 1) buckets.Today.push(s);
     else if (ageDays < 2) buckets.Yesterday.push(s);
     else if (ageDays < 7) buckets["Previous 7 Days"].push(s);
@@ -62,7 +67,7 @@ function groupSessions(sessions: SessionSummary[]): Group[] {
 
   const groups: Group[] = [];
   if (pinned.length > 0) groups.push({ label: "Pinned", items: pinned });
-  for (const label of ["Today", "Yesterday", "Previous 7 Days", "Older"]) {
+  for (const label of RECENCY_BUCKETS) {
     if (buckets[label].length > 0) groups.push({ label, items: buckets[label] });
   }
   return groups;
@@ -125,19 +130,26 @@ export function Sidebar({
     const title = editingTitle.trim();
     setEditingId(null);
     if (!title) return;
+    const previousTitle = sessions.find((s) => s.id === id)?.title;
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
     try {
       await renameSession(id, title);
     } catch {
-      // Best-effort: a failed rename just falls out of sync until the next list refresh.
+      // Roll back the optimistic update — the server never applied this title, so showing it
+      // would silently lie about what's actually persisted.
+      if (previousTitle !== undefined) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === id ? { ...s, title: previousTitle } : s))
+        );
+      }
     }
   };
 
   const togglePin = async (session: SessionSummary) => {
     setPendingId(session.id);
     try {
-      await setSessionPinned(session.id, !session.pinned);
-      setSessions(await listSessions(query || undefined));
+      const updated = await setSessionPinned(session.id, !session.pinned);
+      setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch {
       // Ignore — the pin state stays whatever it last successfully was.
     } finally {
@@ -285,7 +297,7 @@ export function Sidebar({
                           {s.status !== "done" && ` · ${s.status}`}
                         </div>
                       </button>
-                      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100">
+                      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                         {pendingId === s.id ? (
                           <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />
                         ) : (
@@ -293,7 +305,7 @@ export function Sidebar({
                             <button
                               title={s.pinned ? "Unpin" : "Pin"}
                               onClick={() => togglePin(s)}
-                              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               {s.pinned ? (
                                 <PinOff className="h-3.5 w-3.5" />
@@ -304,14 +316,14 @@ export function Sidebar({
                             <button
                               title="Rename"
                               onClick={() => startRename(s)}
-                              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
                             <button
                               title="Delete"
                               onClick={() => setConfirmDeleteId(s.id)}
-                              className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>

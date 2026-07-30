@@ -1,16 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/app/sidebar";
-import { ChatPanel } from "@/components/app/chat-panel";
+import { ChatPanel, FALLBACK_STARTER_SUGGESTIONS } from "@/components/app/chat-panel";
 import { DrawerMode, ResearchDrawer } from "@/components/app/research-drawer";
-import { getResearchReport, getResearchStatus, streamChat } from "@/lib/api";
+import { getResearchReport, getResearchStatus, getStarterSuggestions, streamChat } from "@/lib/api";
 import { withSpan } from "@/lib/telemetry";
 import {
   Message,
   Phase,
   ProgressStep,
   ResearchSource,
+  ResearchStatus,
   SessionSummary,
   StreamEvent,
 } from "@/lib/types";
@@ -27,6 +28,9 @@ export default function Home() {
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("progress");
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionsRefresh, setSessionsRefresh] = useState(0);
+  const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
+    FALLBACK_STARTER_SUGGESTIONS
+  );
 
   // Bumped on every selectSession call; async work below checks it's still current before
   // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
@@ -38,6 +42,38 @@ export default function Home() {
   const lastClarifyQuestionRef = useRef<string | null>(null);
 
   const addMessage = (m: Message) => setMessages((prev) => [...prev, m]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getStarterSuggestions()
+      .then((prompts) => {
+        if (!cancelled && prompts.length > 0) setStarterSuggestions(prompts);
+      })
+      .catch(() => {
+        // Keep the fallback list — the idle screen must never show nothing.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Apply a fetched `ResearchStatus`'s clarify fields to state: refreshes the suggestion chips,
+   * and — only when `clarify_question` is genuinely new — appends (or, for a freshly opened
+   * session, seeds) an assistant message for it. Shared by `pollUntilSettled` (which appends to
+   * the running conversation) and `selectSession` (which seeds a just-cleared one). */
+  const applyClarifyStatus = (status: ResearchStatus, seedMessages: boolean) => {
+    if (status.status !== "clarifying") {
+      setClarifySuggestions([]);
+      return;
+    }
+    setClarifySuggestions(status.clarify_suggestions);
+    if (status.clarify_question && status.clarify_question !== lastClarifyQuestionRef.current) {
+      lastClarifyQuestionRef.current = status.clarify_question;
+      const message: Message = { id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question };
+      if (seedMessages) setMessages([message]);
+      else addMessage(message);
+    }
+  };
 
   /** Send one chat turn to /chat/stream, folding progress/source events into state as they
    * arrive, and returning the terminal (clarify | done) event once the stream ends — or `null`
@@ -62,6 +98,9 @@ export default function Home() {
           } else if (event.type === "source") {
             sourceCount += 1;
             setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
+          } else if (event.type === "source_url") {
+            // Per-source URL detail isn't surfaced in the UI yet — explicitly ignored so it
+            // never falls into the terminal branch below (it has no `thread_id`).
           } else {
             setThreadId(event.thread_id);
             if (event.type === "done") setReport(event.report);
@@ -103,15 +142,7 @@ export default function Home() {
           setPhase("idle");
           return;
         }
-        if (status.status === "clarifying") {
-          setClarifySuggestions(status.clarify_suggestions);
-          if (status.clarify_question && status.clarify_question !== lastClarifyQuestionRef.current) {
-            lastClarifyQuestionRef.current = status.clarify_question;
-            addMessage({ id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question });
-          }
-        } else {
-          setClarifySuggestions([]);
-        }
+        applyClarifyStatus(status, false);
         setPhase(status.status === "clarifying" ? "clarifying" : "running");
         pollUntilSettled(sessionId, token);
       } catch {
@@ -156,15 +187,7 @@ export default function Home() {
       const status = await getResearchStatus(session.id);
       if (selectionTokenRef.current !== token) return;
       setDrawerMode("progress");
-      if (status.status === "clarifying") {
-        setClarifySuggestions(status.clarify_suggestions);
-        if (status.clarify_question) {
-          lastClarifyQuestionRef.current = status.clarify_question;
-          setMessages([{ id: crypto.randomUUID(), kind: "assistant", text: status.clarify_question }]);
-        }
-      } else {
-        setClarifySuggestions([]);
-      }
+      applyClarifyStatus(status, true);
       setPhase(status.status === "clarifying" ? "clarifying" : "running");
       if (
         status.status === "clarifying" ||
@@ -238,6 +261,7 @@ export default function Home() {
           }}
           clarifySuggestions={clarifySuggestions}
           setClarifySuggestions={setClarifySuggestions}
+          starterSuggestions={starterSuggestions}
         />
         {drawerOpen && topic && (
           <div className="hidden w-[420px] shrink-0 md:block">
@@ -247,7 +271,7 @@ export default function Home() {
               steps={steps}
               sources={sources}
               report={report}
-              isRunning={phase === "running"}
+              isRunning={phase === "running" || phase === "clarifying"}
               onClose={() => setDrawerOpen(false)}
             />
           </div>

@@ -134,7 +134,13 @@ class SessionStore:
                 SessionTable.pinned.desc(), SessionTable.created_at.desc()
             )
             if query:
-                stmt = stmt.where(SessionTable.title.ilike(f"%{query}%"))
+                # Escape LIKE metacharacters in the user's own search text before wrapping it in
+                # our own wildcards, so a literal `%`/`_` in a title search matches literally
+                # instead of acting as a wildcard.
+                escaped = (
+                    query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                )
+                stmt = stmt.where(SessionTable.title.ilike(f"%{escaped}%", escape="\\"))
             result = await session.execute(stmt)
             return [_to_record(row) for row in result.scalars().all()]
 
