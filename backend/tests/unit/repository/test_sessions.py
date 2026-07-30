@@ -47,16 +47,22 @@ async def test_set_status_updates_status_and_optional_report(
     assert done.report == "# Report"
 
 
-async def test_set_status_stores_clarify_question_and_error(
+async def test_set_status_stores_clarify_question_suggestions_and_error(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     store = SessionStore(session_factory)
     await store.touch("t4", title="EV charging in the EU")
 
-    await store.set_status("t4", "clarifying", clarify_question="Which region?")
+    await store.set_status(
+        "t4",
+        "clarifying",
+        clarify_question="Which region?",
+        clarify_suggestions=["North America", "Global"],
+    )
     clarifying = await store.get("t4")
     assert clarifying is not None
     assert clarifying.clarify_question == "Which region?"
+    assert clarifying.clarify_suggestions == ["North America", "Global"]
 
     await store.set_status("t4", "failed", error="LLM provider unavailable")
     failed = await store.get("t4")

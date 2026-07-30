@@ -19,6 +19,9 @@ class SessionTable(Base):
     )
     report: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     clarify_question: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    clarify_suggestions: Mapped[list[str]] = mapped_column(
+        JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
+    )
     error: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     sources: Mapped[list[dict[str, str]]] = mapped_column(
         JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")

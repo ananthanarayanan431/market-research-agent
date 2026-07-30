@@ -30,6 +30,25 @@ async def test_get_research_status_reflects_clarifying_then_done(client: TestCli
     assert done.json()["data"]["report"] == "# EV Charging Market Report"
 
 
+async def test_get_research_status_includes_clarify_question_and_suggestions(
+    client: TestClient,
+) -> None:
+    thread_id = str(uuid.uuid4())
+    await _run_turn(client, thread_id, "Research the EV charging market")
+    # ChatService doesn't forward clarify_suggestions to the session store yet (that wiring is
+    # Task 3's job); persist it directly here to exercise Task 2's read path in isolation -
+    # ResearchStatusResponse surfacing whatever the session store holds.
+    await client.app.state.sessions.set_status(
+        thread_id, "clarifying", clarify_suggestions=["North America", "Global", "EU only"]
+    )
+
+    response = client.get(f"/v1/research/{thread_id}")
+
+    data = response.json()["data"]
+    assert data["clarify_question"] == "Which region should I focus on?"
+    assert data["clarify_suggestions"] == ["North America", "Global", "EU only"]
+
+
 async def test_get_research_report_before_done_returns_404(client: TestClient) -> None:
     thread_id = str(uuid.uuid4())
     await _run_turn(client, thread_id, "Research the EV charging market", operation="chat_stream")

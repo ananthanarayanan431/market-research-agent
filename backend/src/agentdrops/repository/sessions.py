@@ -41,6 +41,7 @@ class SessionRecord:
     report: str | None = None
     sources: list[dict[str, str]] = field(default_factory=list)
     clarify_question: str | None = None
+    clarify_suggestions: list[str] = field(default_factory=list)
     error: str | None = None
     pinned: bool = False
 
@@ -54,6 +55,7 @@ def _to_record(row: SessionTable) -> SessionRecord:
         report=row.report,
         sources=row.sources,
         clarify_question=row.clarify_question,
+        clarify_suggestions=row.clarify_suggestions,
         error=row.error,
         pinned=row.pinned,
     )
@@ -88,6 +90,7 @@ class SessionStore:
         *,
         report: str | None = None,
         clarify_question: str | None = None,
+        clarify_suggestions: list[str] | None = None,
         error: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
@@ -96,6 +99,8 @@ class SessionStore:
                 values["report"] = report
             if clarify_question is not None:
                 values["clarify_question"] = clarify_question
+            if clarify_suggestions is not None:
+                values["clarify_suggestions"] = clarify_suggestions
             if error is not None:
                 values["error"] = error
             await session.execute(

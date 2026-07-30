@@ -104,6 +104,7 @@ class _FakeSessionStore:
         *,
         report: str | None = None,
         clarify_question: str | None = None,
+        clarify_suggestions: list[str] | None = None,
         error: str | None = None,
     ) -> None:
         session = self._sessions.get(thread_id)
@@ -114,6 +115,8 @@ class _FakeSessionStore:
             session.report = report
         if clarify_question is not None:
             session.clarify_question = clarify_question
+        if clarify_suggestions is not None:
+            session.clarify_suggestions = clarify_suggestions
         if error is not None:
             session.error = error
 

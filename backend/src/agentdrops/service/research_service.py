@@ -36,11 +36,19 @@ class ResearchService:
         else:
             research_status = "running"
 
+        clarify_question = None
+        clarify_suggestions: list[str] = []
+        if research_status == "clarifying" and session is not None:
+            clarify_question = session.clarify_question
+            clarify_suggestions = session.clarify_suggestions
+
         return ResearchStatusResponse(
             thread_id=thread_id,
             status=research_status,  # type: ignore[arg-type]
             research_brief=values.get("research_brief") or None,
             report=values.get("final_report") or None,
+            clarify_question=clarify_question,
+            clarify_suggestions=clarify_suggestions,
         )
 
     async def get_report(self, thread_id: str) -> ReportResponse | None:

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -28,6 +28,8 @@ class ResearchStatusResponse(BaseModel):
     status: Literal["queued", "clarifying", "running", "done", "failed"]
     research_brief: str | None = None
     report: str | None = None
+    clarify_question: str | None = None
+    clarify_suggestions: list[str] = Field(default_factory=list)
 
 
 class ReportResponse(BaseModel):
