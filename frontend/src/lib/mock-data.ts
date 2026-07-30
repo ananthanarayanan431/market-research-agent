@@ -11,12 +11,6 @@ export const RECENT_SESSIONS: RecentSession[] = [
   { id: "ai-coding", title: "AI coding assistants market sizing", timeAgo: "2 weeks ago" },
 ];
 
-export const SUGGESTIONS: string[] = [
-  "Competitive landscape for enterprise SaaS in fintech",
-  "Consumer trends in plant-based foods, US market",
-  "Market sizing for AI coding assistants",
-];
-
 export type ProgressStep = {
   title: string;
   detail?: string;

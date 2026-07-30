@@ -119,3 +119,10 @@ export async function getResearchReport(threadId: string): Promise<ReportRespons
   const response = await fetch(`${API_BASE_URL}/v1/research/${threadId}/report`);
   return unwrap<ReportResponse>(response);
 }
+
+/** Fetch LLM-generated example research prompts for the idle chat state, cached server-side. */
+export async function getStarterSuggestions(): Promise<string[]> {
+  const response = await fetch(`${API_BASE_URL}/v1/suggestions/starter`);
+  const { prompts } = await unwrap<{ prompts: string[] }>(response);
+  return prompts;
+}

@@ -2,9 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CheckCircle2, Loader2, Sparkles } from "lucide-react";
-import { SUGGESTIONS } from "@/lib/mock-data";
+import { getStarterSuggestions } from "@/lib/api";
 import { Message, Phase, StreamEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const FALLBACK_STARTER_SUGGESTIONS = [
+  "Competitive landscape for enterprise SaaS in fintech",
+  "Consumer trends in plant-based foods, US market",
+  "Market sizing for AI coding assistants",
+];
 
 export function ChatPanel({
   phase,
@@ -44,6 +50,24 @@ export function ChatPanel({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase]);
+
+  const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
+    FALLBACK_STARTER_SUGGESTIONS
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    getStarterSuggestions()
+      .then((prompts) => {
+        if (!cancelled && prompts.length > 0) setStarterSuggestions(prompts);
+      })
+      .catch(() => {
+        // Keep the fallback list — the idle screen must never show nothing.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // `deliveryChosen` is scoped to one research run: reset it whenever the active topic changes
   // (a new topic, or a different session reopened from the sidebar), otherwise the format
@@ -179,7 +203,7 @@ export function ChatPanel({
               or a data table.
             </p>
             <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
-              {SUGGESTIONS.map((s) => (
+              {starterSuggestions.map((s) => (
                 <button
                   key={s}
                   onClick={() => startTopic(s)}
