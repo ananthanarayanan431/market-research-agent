@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from langchain_core.language_models import BaseChatModel
+from langgraph.config import get_stream_writer
 
 from agentdrops.agents.llm import ainvoke_with_retry
 from agentdrops.agents.prompts import SUMMARIZE_PROMPT
@@ -69,6 +70,19 @@ async def run_search_pipeline(
         deduped = deduplicate_search_results(results)
         span.set_attribute("search.results_raw", len(results))
         span.set_attribute("search.results_deduped", len(deduped))
+
+        try:
+            writer = get_stream_writer()
+            for result in deduped:
+                writer({
+                    "type": "source_url",
+                    "tool_name": result.tool_name,
+                    "title": result.title,
+                    "url": result.url,
+                })
+        except (KeyError, RuntimeError):
+            # Raised outside a LangGraph context; silently skip emitting stream events
+            pass
 
         summarized = await asyncio.gather(
             *(summarize_webpage_content(llm, result.snippet) for result in deduped)
