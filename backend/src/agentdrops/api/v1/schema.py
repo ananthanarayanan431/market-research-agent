@@ -54,6 +54,12 @@ class SessionsResponse(BaseModel):
     sessions: list[SessionSummary]
 
 
+class StarterSuggestionsResponse(BaseModel):
+    """Example research prompts for the idle chat state."""
+
+    prompts: list[str]
+
+
 class UpdateSessionRequest(BaseModel):
     """Partial update for a session: rename it, pin/unpin it, or both in one call."""
 

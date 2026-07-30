@@ -93,3 +93,10 @@ Target length: about {target_words} words. Requirements:
 - Back factual claims with inline citations to source URLs from the findings.
 - Do not invent facts beyond what the findings support.
 - {is_final_hint}"""
+
+STARTER_SUGGESTIONS_PROMPT = """You are generating example prompts for a market-research
+agent's idle chat screen. Today is {date}.
+
+Propose 3 short, varied example research requests a user might submit — different
+industries/markets each time (e.g. one tech, one consumer goods, one industrial/other), each
+one sentence, phrased the way a user would actually type it."""

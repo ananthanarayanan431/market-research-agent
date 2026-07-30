@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from agentdrops.api.v1.chat import router as chat_router
 from agentdrops.api.v1.research import router as research_router
 from agentdrops.api.v1.sessions import router as sessions_router
+from agentdrops.api.v1.suggestions import router as suggestions_router
 
 router = APIRouter(prefix="/v1")
 router.include_router(chat_router)
@@ -12,5 +13,6 @@ router.include_router(chat_router)
 # /research/sessions route must be matched before research_router's dynamic /research/{thread_id}.
 router.include_router(sessions_router)
 router.include_router(research_router)
+router.include_router(suggestions_router)
 
 __all__ = ["router"]

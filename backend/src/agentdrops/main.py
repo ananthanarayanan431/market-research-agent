@@ -25,6 +25,7 @@ from agentdrops.service.chat_queue_service import ChatQueueService
 from agentdrops.service.chat_service import ChatService
 from agentdrops.service.research_service import ResearchService
 from agentdrops.service.sessions_service import SessionsService
+from agentdrops.service.suggestions_service import SuggestionsService
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
 from agentdrops.worker.celery_app import configure_celery
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.chat_queue_service = ChatQueueService(sessions, redis)
                 app.state.research_service = ResearchService(graph, sessions)
                 app.state.sessions_service = SessionsService(sessions)
+                app.state.suggestions_service = SuggestionsService(settings, redis)
                 yield
         finally:
             await redis.aclose()

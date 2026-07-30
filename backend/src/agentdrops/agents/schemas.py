@@ -54,3 +54,12 @@ class ReportPlan(BaseModel):
         description="Ordered sections that together cover the research brief end-to-end, "
         "with no gaps and no overlap."
     )
+
+
+class StarterSuggestions(BaseModel):
+    """Example research prompts shown on the idle chat state, before the user has typed anything."""
+
+    prompts: list[str] = Field(
+        description="3 short, varied example market-research prompts a user might submit — "
+        "different industries/markets each time, one sentence each."
+    )
