@@ -161,12 +161,35 @@ async def test_delete_removes_session_and_reports_it_existed(
 ) -> None:
     store = SessionStore(session_factory)
     await store.touch("t-delete", title="EV charging in the EU")
+    await store.set_status("t-delete", "clarifying")
 
-    assert await store.delete("t-delete") is True
+    assert await store.delete("t-delete") == "deleted"
     assert await store.get("t-delete") is None
 
 
-async def test_delete_returns_false_for_unknown_thread(
+async def test_delete_returns_not_found_for_unknown_thread(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    assert await SessionStore(session_factory).delete("does-not-exist") is False
+    assert await SessionStore(session_factory).delete("does-not-exist") == "not_found"
+
+
+async def test_delete_refuses_a_queued_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-queued-delete", title="EV charging in the EU")
+    await store.set_status("t-queued-delete", "queued")
+
+    assert await store.delete("t-queued-delete") == "in_progress"
+    assert await store.get("t-queued-delete") is not None
+
+
+async def test_delete_refuses_a_running_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    store = SessionStore(session_factory)
+    await store.touch("t-running-delete", title="EV charging in the EU")
+    await store.set_status("t-running-delete", "running")
+
+    assert await store.delete("t-running-delete") == "in_progress"
+    assert await store.get("t-running-delete") is not None

@@ -21,6 +21,13 @@ from sqlalchemy.sql import func
 from agentdrops.db.models import SessionTable
 
 Status = Literal["queued", "clarifying", "running", "done", "failed"]
+DeleteResult = Literal["deleted", "not_found", "in_progress"]
+
+# Statuses where the Celery worker either owns the row right now or is about to: deleting the
+# `sessions` row underneath it makes the worker's terminal `set_status`/`AuditLog.record` calls
+# race a row that no longer exists, which trips `fk_audit_log_thread_id_sessions` and discards an
+# already-completed report.
+_IN_FLIGHT_STATUSES: frozenset[Status] = frozenset({"queued", "running"})
 
 
 @dataclass
@@ -150,13 +157,22 @@ class SessionStore:
             await session.commit()
             return _to_record(row) if row is not None else None
 
-    async def delete(self, thread_id: str) -> bool:
-        """Remove a session row. Returns whether a row was actually deleted."""
+    async def delete(self, thread_id: str) -> DeleteResult:
+        """Remove a session row, refusing while a turn is still in flight (`queued`/`running`).
+        The status check and the delete happen in one statement, so a concurrent worker
+        `set_status` call can't race it into deleting a row it just decided was safe to remove."""
         async with self._session_factory() as session:
             result = await session.execute(
                 delete(SessionTable)
-                .where(SessionTable.thread_id == thread_id)
+                .where(
+                    SessionTable.thread_id == thread_id,
+                    SessionTable.status.not_in(_IN_FLIGHT_STATUSES),
+                )
                 .returning(SessionTable.thread_id)
             )
+            if result.scalar_one_or_none() is not None:
+                await session.commit()
+                return "deleted"
+            existing = await session.get(SessionTable, thread_id)
             await session.commit()
-            return result.scalar_one_or_none() is not None
+            return "in_progress" if existing is not None else "not_found"

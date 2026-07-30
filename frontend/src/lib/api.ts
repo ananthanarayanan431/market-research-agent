@@ -91,11 +91,18 @@ export async function setSessionPinned(
   return unwrap<SessionSummary>(response);
 }
 
+/** Thrown by `deleteSession` when the backend refuses because the session's turn is still
+ * `queued`/`running` (409) — distinct from other failures so the UI can explain why. */
+export class SessionInProgressError extends Error {}
+
 /** Permanently delete a session from the sidebar. */
 export async function deleteSession(threadId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/research/sessions/${threadId}`, {
     method: "DELETE",
   });
+  if (response.status === 409) {
+    throw new SessionInProgressError("Research is still in progress for this session");
+  }
   if (!response.ok) {
     throw new Error(`Failed to delete session ${threadId} (status ${response.status})`);
   }

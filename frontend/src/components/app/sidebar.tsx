@@ -15,7 +15,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { deleteSession, listSessions, renameSession, setSessionPinned } from "@/lib/api";
+import {
+  deleteSession,
+  listSessions,
+  renameSession,
+  SessionInProgressError,
+  setSessionPinned,
+} from "@/lib/api";
 import { SessionSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +88,7 @@ export function Sidebar({
   const [editingTitle, setEditingTitle] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [deleteBlockedId, setDeleteBlockedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,8 +152,14 @@ export function Sidebar({
       await deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       onSessionDeleted(id);
-    } catch {
-      // Ignore — the row stays in the list if the delete call failed.
+    } catch (err) {
+      if (err instanceof SessionInProgressError) {
+        setDeleteBlockedId(id);
+        setTimeout(() => {
+          setDeleteBlockedId((current) => (current === id ? null : current));
+        }, 2500);
+      }
+      // Otherwise ignore — the row stays in the list if the delete call failed.
     } finally {
       setPendingId(null);
     }
@@ -211,7 +224,13 @@ export function Sidebar({
                     activeSessionId === s.id && "bg-accent"
                   )}
                 >
-                  {confirmDeleteId === s.id ? (
+                  {deleteBlockedId === s.id ? (
+                    <div className="flex items-center px-2 py-2 text-xs text-muted-foreground">
+                      <span className="truncate">
+                        Still researching — try again once it&apos;s done.
+                      </span>
+                    </div>
+                  ) : confirmDeleteId === s.id ? (
                     <div className="flex items-center justify-between gap-2 px-2 py-2 text-xs">
                       <span className="truncate text-muted-foreground">Delete this session?</span>
                       <div className="flex shrink-0 items-center gap-1">

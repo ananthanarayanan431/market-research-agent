@@ -1,7 +1,7 @@
 """Sessions service: recent research threads for the sidebar."""
 
 from agentdrops.api.v1.schema import SessionSummary
-from agentdrops.repository.sessions import SessionRecord, SessionStore
+from agentdrops.repository.sessions import DeleteResult, SessionRecord, SessionStore
 
 
 def _to_summary(record: SessionRecord) -> SessionSummary:
@@ -41,6 +41,7 @@ class SessionsService:
             record = await self._sessions.get(thread_id)
         return _to_summary(record) if record is not None else None
 
-    async def delete(self, thread_id: str) -> bool:
-        """Delete a session. Returns whether it existed."""
+    async def delete(self, thread_id: str) -> DeleteResult:
+        """Delete a session; refuses (`"in_progress"`) while its turn is still `queued`/`running`
+        so the worker's terminal writes don't race a `sessions` row that vanished mid-turn."""
         return await self._sessions.delete(thread_id)

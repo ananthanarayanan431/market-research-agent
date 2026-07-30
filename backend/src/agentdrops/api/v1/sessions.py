@@ -4,7 +4,11 @@ from fastapi import APIRouter, Request, status
 
 from agentdrops.api.v1.schema import SessionsResponse, SessionSummary, UpdateSessionRequest
 from agentdrops.service.sessions_service import SessionsService
-from agentdrops.types.error_codes import NotFoundError, fastAPIErrorResponseModels
+from agentdrops.types.error_codes import (
+    EntityConflictError,
+    NotFoundError,
+    fastAPIErrorResponseModels,
+)
 from agentdrops.types.response import ErrorResponse, SuccessResponse
 
 router = APIRouter(prefix="/research", tags=["sessions"])
@@ -47,10 +51,19 @@ async def update_session(
     "/sessions/{thread_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a research session",
-    responses={status.HTTP_404_NOT_FOUND: fastAPIErrorResponseModels[status.HTTP_404_NOT_FOUND]},
+    responses={
+        status.HTTP_404_NOT_FOUND: fastAPIErrorResponseModels[status.HTTP_404_NOT_FOUND],
+        status.HTTP_409_CONFLICT: fastAPIErrorResponseModels[status.HTTP_409_CONFLICT],
+    },
 )
 async def delete_session(request: Request, thread_id: str) -> None:
-    """Permanently delete a session's sidebar record; 404 if `thread_id` is unknown."""
+    """Permanently delete a session's sidebar record; 404 if `thread_id` is unknown, 409 if its
+    turn is still `queued`/`running` (deleting mid-turn would race the worker's terminal writes)."""
     service: SessionsService = request.app.state.sessions_service
-    if not await service.delete(thread_id):
+    result = await service.delete(thread_id)
+    if result == "not_found":
         raise ErrorResponse(NotFoundError(message="Unknown thread_id"))
+    if result == "in_progress":
+        raise ErrorResponse(
+            EntityConflictError(message="Research is still in progress for this session")
+        )

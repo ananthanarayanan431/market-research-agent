@@ -72,3 +72,24 @@ async def test_delete_session_404s_for_unknown_thread(client: TestClient) -> Non
     response = client.delete("/v1/research/sessions/does-not-exist")
 
     assert response.status_code == 404
+
+
+async def test_delete_session_409s_while_running(client: TestClient) -> None:
+    thread_id = str(uuid.uuid4())
+    await client.app.state.sessions.touch(thread_id, title="EV charging market")
+    await client.app.state.sessions.set_status(thread_id, "running")
+
+    response = client.delete(f"/v1/research/sessions/{thread_id}")
+
+    assert response.status_code == 409
+    assert client.get("/v1/research/sessions").json()["data"]["sessions"][0]["id"] == thread_id
+
+
+async def test_delete_session_409s_while_queued(client: TestClient) -> None:
+    thread_id = str(uuid.uuid4())
+    await client.app.state.sessions.touch(thread_id, title="EV charging market")
+    await client.app.state.sessions.set_status(thread_id, "queued")
+
+    response = client.delete(f"/v1/research/sessions/{thread_id}")
+
+    assert response.status_code == 409

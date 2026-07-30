@@ -145,8 +145,14 @@ class _FakeSessionStore:
         session.pinned = pinned
         return session
 
-    async def delete(self, thread_id: str) -> bool:
-        return self._sessions.pop(thread_id, None) is not None
+    async def delete(self, thread_id: str) -> str:
+        session = self._sessions.get(thread_id)
+        if session is None:
+            return "not_found"
+        if session.status in ("queued", "running"):
+            return "in_progress"
+        del self._sessions[thread_id]
+        return "deleted"
 
 
 class _FakeAuditLog:
