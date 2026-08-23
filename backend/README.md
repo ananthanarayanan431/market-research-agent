@@ -47,7 +47,7 @@ after `docker compose up -d`, before starting the API — required in dev and in
 ## Run
 
 ```bash
-uvicorn agentdrops.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8001
 ```
 
 A Celery worker must also be running (`make worker`) — chat turns are enqueued by the API but

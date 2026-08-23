@@ -1,6 +1,6 @@
 """System prompt for the writer's report-planning call."""
 
-REPORT_PLAN_PROMPT = """You are planning the structure of a long, in-depth market-research report.
+REPORT_PLAN_PROMPT = """You are planning the structure of a long, in-depth finance research report.
 Today is {date}.
 
 Research brief:

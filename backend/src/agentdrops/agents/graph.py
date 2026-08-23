@@ -7,7 +7,10 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentdrops.agents.contexthub.embeddings import EmbeddingClient
+from agentdrops.agents.contexthub.tools import make_context_hub_tool
 from agentdrops.agents.llm import build_llm
 from agentdrops.agents.research.graph import build_research_graph
 from agentdrops.agents.scope.graph import build_scope_nodes, route_after_clarify
@@ -16,22 +19,44 @@ from agentdrops.agents.supervisor.graph import build_supervisor_graph, get_notes
 from agentdrops.agents.tools import make_tavily_tool, think_tool
 from agentdrops.agents.writer.graph import build_writer_node
 from agentdrops.config import Settings
+from agentdrops.repository.contexthub import ContextHubStore
 from agentdrops.webtools.tavily import TavilySearchTool
 
 
 def build_market_researcher(
-    settings: Settings, client: httpx.AsyncClient, checkpointer: BaseCheckpointSaver[Any]
+    settings: Settings,
+    client: httpx.AsyncClient,
+    checkpointer: BaseCheckpointSaver[Any],
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    *,
+    use_context_hub: bool = False,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
-    """Compile the full market-research pipeline, with Tavily wired in as the only search tool.
-
-    Other search tools (exa/news/reddit) drop in later by adding them to the `tools` list passed
-    to `build_research_graph` — no changes needed elsewhere in the pipeline.
+    """Compile the full market-research pipeline. `tavily_search`/`think_tool` are always
+    available; `context_hub_search` is included only when `use_context_hub` is True (a
+    per-turn opt-in — see worker/tasks.py), which requires `session_factory` to build its
+    `ContextHubStore`.
     """
     tavily = TavilySearchTool(api_key=settings.tavily_api_key, client=client)
     summarizer_llm = build_llm(settings)
     tavily_search = make_tavily_tool(tavily, summarizer_llm)
+    tools: list[Any] = [tavily_search, think_tool]
 
-    research_graph = build_research_graph(settings, tools=[tavily_search, think_tool])
+    if use_context_hub:
+        assert session_factory is not None, "use_context_hub=True requires a session_factory"
+        contexthub_store = ContextHubStore(session_factory)
+        embedder = EmbeddingClient(
+            api_key=settings.embedding_api_key,
+            base_url=settings.embedding_base_url,
+            model=settings.embedding_model,
+            client=client,
+        )
+        tools.append(
+            make_context_hub_tool(
+                contexthub_store, embedder, top_k=settings.contexthub_search_top_k
+            )
+        )
+
+    research_graph = build_research_graph(settings, tools=tools)
     supervisor_graph = build_supervisor_graph(settings, research_graph)
     clarify_with_user, write_research_brief = build_scope_nodes(settings)
     final_report_generation = build_writer_node(settings)

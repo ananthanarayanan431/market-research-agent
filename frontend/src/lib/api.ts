@@ -1,5 +1,6 @@
 import {
   ApiEnvelope,
+  ContextHubDocument,
   ReportResponse,
   ResearchStatus,
   SessionSummary,
@@ -26,12 +27,17 @@ async function unwrap<T>(response: Response): Promise<T> {
 export async function streamChat(
   message: string,
   threadId: string | null,
+  useContextHub: boolean,
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread_id: threadId, message }),
+    body: JSON.stringify({
+      thread_id: threadId,
+      message,
+      use_context_hub: useContextHub,
+    }),
   });
 
   if (!response.ok || !response.body) {
@@ -125,4 +131,43 @@ export async function getStarterSuggestions(): Promise<string[]> {
   const response = await fetch(`${API_BASE_URL}/v1/suggestions/starter`);
   const { prompts } = await unwrap<{ prompts: string[] }>(response);
   return prompts;
+}
+
+/** List every Context Hub document (global — not scoped to a session), newest first. */
+export async function listContextHubDocuments(): Promise<ContextHubDocument[]> {
+  const response = await fetch(`${API_BASE_URL}/v1/contexthub/documents`);
+  const { documents } = await unwrap<{ documents: ContextHubDocument[] }>(response);
+  return documents;
+}
+
+/** Upload a file into Context Hub. Ingestion (extract/chunk/embed) runs async — the returned
+ * record starts at status "processing"; re-fetch the list to see it flip to "ready"/"failed". */
+export async function uploadContextHubFile(file: File): Promise<ContextHubDocument> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/v1/contexthub/documents`, {
+    method: "POST",
+    body: formData,
+  });
+  return unwrap<ContextHubDocument>(response);
+}
+
+/** Add a URL into Context Hub; fetched and ingested the same way as an uploaded file. */
+export async function addContextHubUrl(url: string): Promise<ContextHubDocument> {
+  const response = await fetch(`${API_BASE_URL}/v1/contexthub/urls`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  return unwrap<ContextHubDocument>(response);
+}
+
+/** Permanently delete a Context Hub document. */
+export async function deleteContextHubDocument(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/contexthub/documents/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete Context Hub document ${id} (status ${response.status})`);
+  }
 }

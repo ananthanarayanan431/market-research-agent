@@ -8,6 +8,14 @@ duplicated or buried in a route module.
 CHAT_TITLE_MAX_LENGTH = 80
 """A session's title is the opening message, trimmed to this length for the sidebar."""
 
+
+def truncate_title(message: str) -> str:
+    """Trim `message` to `CHAT_TITLE_MAX_LENGTH`, appending an ellipsis when it was cut short —
+    a bare slice leaves titles ending mid-word with no indication they were truncated."""
+    if len(message) <= CHAT_TITLE_MAX_LENGTH:
+        return message
+    return message[: CHAT_TITLE_MAX_LENGTH - 1] + "…"
+
 CHAT_NODE_LABELS: dict[str, str] = {
     "clarify_with_user": "Reviewing your request",
     "write_research_brief": "Planning research approach",

@@ -77,6 +77,7 @@ class StarterSuggestions(BaseModel):
     prompts: list[str] = Field(
         min_length=3,
         max_length=3,
-        description="3 short, varied example market-research prompts a user might submit — "
-        "different industries/markets each time, one sentence each.",
+        description="3 short, varied example finance research prompts a user might submit — "
+        "a different finance sub-domain each time (equities, macro, corporate finance, "
+        "personal finance, etc.), one sentence each.",
     )

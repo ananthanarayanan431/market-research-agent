@@ -1,6 +1,6 @@
 """System prompt for summarizing one search result's page content."""
 
-SUMMARIZE_PROMPT = """Summarize the following page content for a market-research report. This
+SUMMARIZE_PROMPT = """Summarize the following page content for a finance research report. This
 summary will be used by a downstream research agent, so preserve the details that matter more
 than you shorten the text.
 
@@ -15,7 +15,9 @@ than you shorten the text.
 - Preserve chronological order if the content is time-sensitive.
 - Preserve lists or step-by-step details if present.
 - For news content, cover the who/what/when/where/why/how. For data or research content,
-  preserve methodology and results. For product pages, keep key features and specifications.
+  preserve methodology and results. For financial filings, earnings releases, or analyst
+  notes, preserve key figures, guidance, and valuation metrics verbatim. For product pages,
+  keep key features and specifications.
 </Guidelines>
 
 Aim for roughly 25-30% of the original length unless the content is already concise — the goal

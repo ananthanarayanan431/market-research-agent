@@ -1,4 +1,4 @@
-export type Phase = "idle" | "clarifying" | "running" | "complete" | "delivered";
+export type Phase = "idle" | "clarifying" | "running" | "complete";
 
 export type Message =
   | { id: string; kind: "user"; text: string }
@@ -7,6 +7,8 @@ export type Message =
 export type ProgressStep = {
   title: string;
   detail?: string;
+  topic?: string;
+  active: boolean;
 };
 
 export type ResearchSource = {
@@ -15,7 +17,7 @@ export type ResearchSource = {
 };
 
 export type StreamEvent =
-  | { type: "progress"; step: string; detail?: string }
+  | { type: "progress"; step: string; detail?: string; topic?: string }
   | { type: "source"; topic: string; summary: string }
   | { type: "source_url"; topic: string; tool_name: string; title: string; url: string }
   | { type: "clarify"; thread_id: string; response: string; suggestions: string[] }
@@ -59,3 +61,14 @@ export type ApiError = {
 export type ApiEnvelope<T> =
   | { success: true; data: T }
   | { success: false; data: ApiError };
+
+export type ContextHubDocumentStatus = "processing" | "ready" | "failed";
+
+export type ContextHubDocument = {
+  id: string;
+  title: string;
+  source_type: "file" | "url";
+  status: ContextHubDocumentStatus;
+  error: string | null;
+  created_at: string;
+};

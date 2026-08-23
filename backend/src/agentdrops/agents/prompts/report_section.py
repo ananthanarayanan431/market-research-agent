@@ -1,6 +1,6 @@
 """System prompt for the writer's per-section drafting call."""
 
-REPORT_SECTION_PROMPT = """You are drafting one section of a long market-research report. Today
+REPORT_SECTION_PROMPT = """You are drafting one section of a long finance research report. Today
 is {date}.
 
 Research brief:

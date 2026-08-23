@@ -6,7 +6,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from agentdrops.config.constants import CHAT_NODE_LABELS, CHAT_TITLE_MAX_LENGTH
+from agentdrops.config.constants import CHAT_NODE_LABELS, truncate_title
 from agentdrops.observability.logging import bind_run_id
 from agentdrops.observability.tracing import traced_span
 from agentdrops.repository.audit import AuditLog
@@ -39,7 +39,7 @@ class ChatService:
         is what makes a single run filterable end-to-end in SigNoz. `operation` tags the audit
         row so `/chat` and `/chat/stream` calls stay distinguishable in the trail.
         """
-        await self._sessions.touch(thread_id, title=message[:CHAT_TITLE_MAX_LENGTH])
+        await self._sessions.touch(thread_id, title=truncate_title(message))
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
         inputs = {"messages": [HumanMessage(content=message)]}
 

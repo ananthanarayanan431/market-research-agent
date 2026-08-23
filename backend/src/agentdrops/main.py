@@ -20,12 +20,15 @@ from agentdrops.config import get_settings
 from agentdrops.db.engine import create_engine, create_session_factory
 from agentdrops.observability.setup import configure_observability, instrument_fastapi
 from agentdrops.repository.audit import AuditLog
+from agentdrops.repository.contexthub import ContextHubStore
 from agentdrops.repository.sessions import SessionStore
 from agentdrops.service.chat_queue_service import ChatQueueService
 from agentdrops.service.chat_service import ChatService
+from agentdrops.service.contexthub_service import ContextHubService
 from agentdrops.service.research_service import ResearchService
 from agentdrops.service.sessions_service import SessionsService
 from agentdrops.service.suggestions_service import SuggestionsService
+from agentdrops.storage.contexthub import ContextHubStorage
 from agentdrops.types.error_codes import Error, ValidationError
 from agentdrops.types.response import ErrorResponse, Response, SuccessResponse
 from agentdrops.worker.celery_app import configure_celery
@@ -54,6 +57,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 checkpointer(settings) as saver,
             ):
                 session_factory = create_session_factory(engine)
+                contexthub_store = ContextHubStore(session_factory)
+                contexthub_storage = ContextHubStorage(settings)
+                app.state.contexthub_service = ContextHubService(
+                    contexthub_store, contexthub_storage, settings.contexthub_max_upload_mb
+                )
                 graph = build_market_researcher(settings, client, saver)
                 sessions = SessionStore(session_factory)
                 audit = AuditLog(session_factory)

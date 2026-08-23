@@ -22,6 +22,7 @@ def _settings() -> Settings:
         minio_endpoint="localhost:9000",
         minio_access_key="minioadmin",
         minio_secret_key="minioadmin",
+        embedding_api_key="embed-test",
     )
 
 

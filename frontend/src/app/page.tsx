@@ -25,12 +25,14 @@ export default function Home() {
   const [clarifySuggestions, setClarifySuggestions] = useState<string[]>([]);
   const [report, setReport] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerExpanded, setDrawerExpanded] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("progress");
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionsRefresh, setSessionsRefresh] = useState(0);
   const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
     FALLBACK_STARTER_SUGGESTIONS
   );
+  const [useContextHub, setUseContextHub] = useState(false);
 
   // Bumped on every selectSession call; async work below checks it's still current before
   // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
@@ -91,16 +93,31 @@ export default function Home() {
         const token = selectionTokenRef.current;
         let terminal: StreamEvent | null = null;
         let sourceCount = 0;
-        await streamChat(text, threadId, (event) => {
+        await streamChat(text, threadId, useContextHub, (event) => {
           if (selectionTokenRef.current !== token) return;
           if (event.type === "progress") {
-            setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
+            // A new top-level stage retires every earlier top-level step, but leaves concurrent
+            // per-topic research steps running — those close individually on their own "source"
+            // event below, since several can still be in flight when the next stage starts.
+            setSteps((prev) => [
+              ...prev.map((s) => (s.topic ? s : { ...s, active: false })),
+              { title: event.step, detail: event.detail, topic: event.topic, active: true },
+            ]);
           } else if (event.type === "source") {
             sourceCount += 1;
             setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
+            setSteps((prev) =>
+              prev.map((s) => (s.topic === event.topic ? { ...s, active: false } : s))
+            );
           } else if (event.type === "source_url") {
-            // Per-source URL detail isn't surfaced in the UI yet — explicitly ignored so it
-            // never falls into the terminal branch below (it has no `thread_id`).
+            // Surface the page currently being read as the active topic step's live detail line.
+            setSteps((prev) =>
+              prev.map((s) =>
+                s.topic === event.topic && s.active
+                  ? { ...s, detail: `Reading: ${event.title}` }
+                  : s
+              )
+            );
           } else {
             setThreadId(event.thread_id);
             if (event.type === "done") setReport(event.report);
@@ -165,6 +182,7 @@ export default function Home() {
     setClarifySuggestions([]);
     setReport(null);
     setDrawerOpen(true);
+    setDrawerExpanded(false);
     lastClarifyQuestionRef.current = null;
 
     if (session.status === "done") {
@@ -211,6 +229,7 @@ export default function Home() {
     setPhase("running");
     setDrawerMode("progress");
     setDrawerOpen(true);
+    setDrawerExpanded(false);
     lastClarifyQuestionRef.current = null;
   };
 
@@ -226,6 +245,7 @@ export default function Home() {
     setReport(null);
     setMessages([]);
     setDrawerOpen(false);
+    setDrawerExpanded(false);
     setDrawerMode("progress");
     lastClarifyQuestionRef.current = null;
   };
@@ -251,20 +271,25 @@ export default function Home() {
           addMessage={addMessage}
           sendMessage={sendMessage}
           onStartRun={startRun}
-          onOpenDrawer={() => {
-            setDrawerMode("progress");
+          onOpenDrawer={(mode) => {
+            setDrawerMode(mode ?? "progress");
             setDrawerOpen(true);
           }}
-          onChooseFormat={(format) => {
-            setDrawerMode(format === "paragraph" ? "report" : "table");
-            setDrawerOpen(true);
-          }}
+          drawerOpen={drawerOpen}
           clarifySuggestions={clarifySuggestions}
           setClarifySuggestions={setClarifySuggestions}
           starterSuggestions={starterSuggestions}
+          useContextHub={useContextHub}
+          setUseContextHub={setUseContextHub}
         />
         {drawerOpen && topic && (
-          <div className="hidden w-[420px] shrink-0 md:block">
+          <div
+            className={
+              drawerExpanded
+                ? "fixed inset-0 z-50 hidden md:block"
+                : "hidden w-[46%] min-w-[460px] max-w-[860px] shrink-0 md:block"
+            }
+          >
             <ResearchDrawer
               title={topic}
               mode={drawerMode}
@@ -272,7 +297,12 @@ export default function Home() {
               sources={sources}
               report={report}
               isRunning={phase === "running" || phase === "clarifying"}
-              onClose={() => setDrawerOpen(false)}
+              expanded={drawerExpanded}
+              onToggleExpand={() => setDrawerExpanded((v) => !v)}
+              onClose={() => {
+                setDrawerOpen(false);
+                setDrawerExpanded(false);
+              }}
             />
           </div>
         )}

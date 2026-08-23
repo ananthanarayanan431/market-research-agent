@@ -193,10 +193,12 @@ class _FakeDelay:
     """Stand-in for Celery's `.delay(...)`: records calls instead of touching a real broker."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, bool]] = []
 
-    def __call__(self, thread_id: str, message: str, operation: str) -> None:
-        self.calls.append((thread_id, message, operation))
+    def __call__(
+        self, thread_id: str, message: str, operation: str, use_context_hub: bool = False
+    ) -> None:
+        self.calls.append((thread_id, message, operation, use_context_hub))
 
 
 def _patch_celery_and_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeDelay:

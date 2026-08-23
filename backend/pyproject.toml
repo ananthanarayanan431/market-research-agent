@@ -34,6 +34,11 @@ dependencies = [
     # Emits GenAI-semantic-convention spans for every LangChain/LangGraph chain, LLM and tool
     # call — prompts, model name and token counts — which is what SigNoz's LLM views read.
     "openinference-instrumentation-langchain>=0.1.29",
+    "pypdf>=4.2",
+    "python-docx>=1.1",
+    "pgvector>=0.3",
+    "minio>=7.2",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -96,4 +101,4 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
