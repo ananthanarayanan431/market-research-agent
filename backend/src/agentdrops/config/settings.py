@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     minio_endpoint: str
     minio_access_key: str
     minio_secret_key: str
+    minio_secure: bool = False
+    """Whether to use HTTPS for minio. False for the local docker-compose instance."""
 
     minio_contexthub_bucket: str = "contexthub"
     """Bucket for raw Context Hub file uploads.

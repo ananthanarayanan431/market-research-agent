@@ -1,4 +1,5 @@
 import pytest
+from minio.error import S3Error
 
 from agentdrops.storage.contexthub import ContextHubStorage
 
@@ -16,5 +17,6 @@ async def test_delete_removes_the_object(contexthub_storage: ContextHubStorage) 
 
     await contexthub_storage.delete("docs/two.txt")
 
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(S3Error) as exc_info:
         await contexthub_storage.get("docs/two.txt")
+    assert exc_info.value.code == "NoSuchKey"

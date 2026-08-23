@@ -20,7 +20,7 @@ pip install -e ".[dev]"           # includes native provider SDKs (anthropic, go
 cp .env.example .env              # required keys; Settings fails fast if any are missing
 
 docker compose up -d              # postgres 5432, redis 6379, minio 9000/9001 (creds match .env.example)
-uvicorn agentdrops.main:app --reload --port 8000
+uvicorn agentdrops.main:app --reload --port 8001
 
 pytest                            # asyncio_mode=auto, pythonpath=src — no manual PYTHONPATH
 pytest tests/unit/agents/supervisor/test_graph.py::test_name   # single test
@@ -32,12 +32,12 @@ mypy src                          # strict mode
 
 ```bash
 npm install
-npm run dev                       # localhost:3000; backend must be on 8000 (CORS is pinned to :3000)
+npm run dev                       # localhost:3000; backend must be on 8001 (CORS is pinned to :3000)
 npm run build
 npm run lint
 ```
 
-`NEXT_PUBLIC_API_BASE_URL` overrides the backend origin (defaults to `http://localhost:8000`).
+`NEXT_PUBLIC_API_BASE_URL` overrides the backend origin (defaults to `http://localhost:8001`).
 
 ## Backend architecture
 

@@ -5,7 +5,7 @@ SHELL := /bin/bash
 NPM         := npm
 NPX         := npx
 PORT        ?= 3000
-API_BASE_URL ?= http://localhost:8000
+API_BASE_URL ?= http://localhost:8001
 
 # ── Colors (disable with NO_COLOR=1) ─────────────────────────────────────────
 ifndef NO_COLOR
@@ -58,9 +58,9 @@ dev: ## Start the Next.js dev server on $(PORT) (backend must be running on $(AP
 
 run: dev ## Alias for `dev`
 
-build: ## Build the production bundle
+build: ## Build the production bundle (bakes $(API_BASE_URL) into the client bundle)
 	@$(call banner,Building frontend)
-	@$(NPM) run build \
+	@NEXT_PUBLIC_API_BASE_URL=$(API_BASE_URL) $(NPM) run build \
 		&& $(call log_ok,build complete) \
 		|| ($(call log_err,build failed); exit 1)
 
@@ -90,6 +90,7 @@ clean: ## Remove build artifacts and caches
 		&& $(call log_ok,workspace cleaned)
 
 stop: ## Kill whatever is listening on $(PORT)
+	@command -v lsof >/dev/null 2>&1 || ($(call log_err,lsof not found — cannot query port $(PORT)); exit 1)
 	@pid=$$(lsof -ti tcp:$(PORT)); \
 	if [ -n "$$pid" ]; then \
 		kill $$pid && $(call log_ok,killed process $$pid on port $(PORT)); \
@@ -100,6 +101,8 @@ stop: ## Kill whatever is listening on $(PORT)
 doctor: ## Sanity-check local dev environment
 	@$(call banner,Environment check)
 	@[ -d node_modules ] && $(call log_ok,node_modules present) || $(call log_warn,no node_modules — run \`make install\`)
-	@command -v node >/dev/null 2>&1 && $(call log_ok,node $$(node --version)) || $(call log_err,node not found)
-	@command -v npm >/dev/null 2>&1 && $(call log_ok,npm $$(npm --version)) || $(call log_err,npm not found)
-	@command -v lsof >/dev/null 2>&1 && $(call log_ok,lsof available (needed by \`make stop\`)) || $(call log_warn,lsof not found)
+	@status=0; \
+	command -v node >/dev/null 2>&1 && $(call log_ok,node $$(node --version)) || { $(call log_err,node not found); status=1; }; \
+	command -v npm >/dev/null 2>&1 && $(call log_ok,npm $$(npm --version)) || { $(call log_err,npm not found); status=1; }; \
+	command -v lsof >/dev/null 2>&1 && $(call log_ok,lsof available (needed by \`make stop\`)) || $(call log_warn,lsof not found); \
+	exit $$status

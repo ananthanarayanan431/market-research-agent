@@ -66,7 +66,7 @@ extracted text; there's no original file to keep.
 
 ## Settings additions (`config/settings.py`)
 
-```
+```python
 minio_contexthub_bucket: str = "contexthub"
 embedding_api_key: str
 embedding_base_url: str = "https://api.openai.com/v1"
@@ -74,6 +74,7 @@ embedding_model: str = "text-embedding-3-small"
 contexthub_chunk_size: int = 1000
 contexthub_chunk_overlap: int = 150
 contexthub_search_top_k: int = 5
+contexthub_max_upload_mb: int = 50  # governs upload-size validation
 ```
 
 New dependencies: `pypdf`, `python-docx`, `pgvector` (SQLAlchemy `Vector` type). The `openai`
