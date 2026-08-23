@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     minio_access_key: str
     minio_secret_key: str
 
+    minio_contexthub_bucket: str = "contexthub"
+    """Bucket for raw Context Hub file uploads (extracted text for URL sources isn't stored here)."""
+
+    embedding_api_key: str
+    embedding_base_url: str = "https://api.openai.com/v1"
+    embedding_model: str = "text-embedding-3-small"
+    """Must produce 1536-dim vectors to match `contexthub_chunks.embedding`'s column type."""
+
+    contexthub_chunk_size: int = 1000
+    contexthub_chunk_overlap: int = 150
+    contexthub_search_top_k: int = 5
+    contexthub_max_upload_mb: int = 50
+
     log_level: str = "INFO"
 
     otel_enabled: bool = True

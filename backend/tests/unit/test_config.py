@@ -16,6 +16,7 @@ def test_settings_loads_required_fields_from_env(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("MINIO_ENDPOINT", "localhost:9000")
     monkeypatch.setenv("MINIO_ACCESS_KEY", "minioadmin")
     monkeypatch.setenv("MINIO_SECRET_KEY", "minioadmin")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "embed-test")
 
     settings = Settings(_env_file=None)
 
@@ -27,6 +28,8 @@ def test_settings_loads_required_fields_from_env(monkeypatch: pytest.MonkeyPatch
     assert settings.reddit_client_secret == "reddit-secret"
     assert settings.reddit_user_agent == "agentdrops-market-research/0.1"
     assert settings.log_level == "INFO"
+    assert settings.embedding_model == "text-embedding-3-small"
+    assert settings.contexthub_chunk_size == 1000
 
 
 def test_settings_missing_required_field_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,6 +45,7 @@ def test_settings_missing_required_field_raises(monkeypatch: pytest.MonkeyPatch)
         "MINIO_ENDPOINT",
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
+        "EMBEDDING_API_KEY",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -61,6 +65,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIO_ENDPOINT", "localhost:9000")
     monkeypatch.setenv("MINIO_ACCESS_KEY", "minioadmin")
     monkeypatch.setenv("MINIO_SECRET_KEY", "minioadmin")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "embed-test")
 
 
 def test_settings_rejects_unsupported_llm_provider(monkeypatch: pytest.MonkeyPatch) -> None:
