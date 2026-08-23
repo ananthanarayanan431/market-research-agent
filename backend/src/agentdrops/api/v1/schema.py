@@ -6,10 +6,12 @@ from pydantic import BaseModel, Field, HttpUrl
 
 
 class ChatRequest(BaseModel):
-    """One chat turn: an optional existing thread to resume, plus the user's message."""
+    """One chat turn: an optional existing thread to resume, the user's message, and whether
+    this turn may consult Context Hub (uploaded/enterprise knowledge) alongside web search."""
 
     thread_id: str | None = None
     message: str
+    use_context_hub: bool = False
 
 
 class ChatQueuedResponse(BaseModel):

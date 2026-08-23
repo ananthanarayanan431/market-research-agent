@@ -45,7 +45,9 @@ async def chat(request: Request, body: ChatRequest) -> SuccessResponse[ChatQueue
     thread_id = body.thread_id or str(uuid.uuid4())
     queue: ChatQueueService = request.app.state.chat_queue_service
     try:
-        await queue.enqueue(thread_id, body.message, operation="chat")
+        await queue.enqueue(
+            thread_id, body.message, operation="chat", use_context_hub=body.use_context_hub
+        )
     except Exception as exc:
         logger.exception("failed to enqueue chat turn for thread_id=%s", thread_id)
         try:
@@ -86,7 +88,9 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     queue: ChatQueueService = request.app.state.chat_queue_service
 
     async def events() -> AsyncIterator[str]:
-        async for event in queue.stream(thread_id, body.message):
+        async for event in queue.stream(
+            thread_id, body.message, use_context_hub=body.use_context_hub
+        ):
             yield _sse(event)
 
     return StreamingResponse(events(), media_type="text/event-stream")

@@ -30,10 +30,12 @@ class _FakeSessionStore:
 
 class _FakeDelay:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, bool]] = []
 
-    def __call__(self, thread_id: str, message: str, operation: str) -> None:
-        self.calls.append((thread_id, message, operation))
+    def __call__(
+        self, thread_id: str, message: str, operation: str, use_context_hub: bool = False
+    ) -> None:
+        self.calls.append((thread_id, message, operation, use_context_hub))
 
 
 async def test_enqueue_touches_and_resets_status_to_queued_before_dispatching(
@@ -50,7 +52,7 @@ async def test_enqueue_touches_and_resets_status_to_queued_before_dispatching(
         ("touch", ("t1",), {"title": "Research the EV charging market"}),
         ("set_status", ("t1", "queued"), {}),
     ]
-    assert fake_delay.calls == [("t1", "Research the EV charging market", "chat")]
+    assert fake_delay.calls == [("t1", "Research the EV charging market", "chat", False)]
 
 
 async def test_enqueue_dispatches_run_turn_task_with_expected_args(
@@ -63,7 +65,20 @@ async def test_enqueue_dispatches_run_turn_task_with_expected_args(
 
     await service.enqueue("t2", "Focus on the EU", operation="chat_stream")
 
-    assert fake_delay.calls == [("t2", "Focus on the EU", "chat_stream")]
+    assert fake_delay.calls == [("t2", "Focus on the EU", "chat_stream", False)]
+
+
+async def test_enqueue_passes_use_context_hub_to_the_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = _FakeSessionStore()
+    fake_delay = _FakeDelay()
+    monkeypatch.setattr(chat_queue_service_module.run_turn_task, "delay", fake_delay)
+    service = ChatQueueService(sessions, object())  # type: ignore[arg-type]
+
+    await service.enqueue("t1", "msg", operation="chat", use_context_hub=True)
+
+    assert fake_delay.calls == [("t1", "msg", "chat", True)]
 
 
 async def test_mark_failed_sets_status_failed_with_error() -> None:

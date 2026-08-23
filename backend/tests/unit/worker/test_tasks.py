@@ -77,6 +77,24 @@ def test_run_turn_task_drives_a_turn_to_completion() -> None:
     # and `tests/unit/api/v1/test_chat.py` — this test only proves the wiring works.
 
 
+def test_run_turn_task_passes_use_context_hub_to_build_market_researcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    def fake_build(settings, client, checkpointer, session_factory=None, *, use_context_hub=False):
+        captured["use_context_hub"] = use_context_hub
+        captured["session_factory"] = session_factory
+        return _FakeGraph()
+
+    monkeypatch.setattr(tasks_module, "build_market_researcher", fake_build)
+
+    tasks_module.run_turn_task("t1", "Research the EV charging market", "chat_stream", True)
+
+    assert captured["use_context_hub"] is True
+    assert captured["session_factory"] is not None
+
+
 class _RecordingSessionStore:
     def __init__(self) -> None:
         self.statuses: list[tuple[str, str, object]] = []

@@ -22,11 +22,19 @@ def test_chat_enqueues_and_returns_queued_immediately(client: TestClient) -> Non
     assert body["status"] == "queued"
     thread_id = body["thread_id"]
     assert client.fake_delay.calls == [  # type: ignore[attr-defined]
-        (thread_id, "Research the EV charging market", "chat")
+        (thread_id, "Research the EV charging market", "chat", False)
     ]
 
     status_response = client.get(f"/v1/research/{thread_id}")
     assert status_response.json()["data"]["status"] == "queued"
+
+
+def test_chat_forwards_use_context_hub_flag(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat", json={"message": "Research EV charging", "use_context_hub": True}
+    )
+    assert response.status_code == 200
+    assert client.fake_delay.calls[-1][3] is True  # type: ignore[attr-defined]
 
 
 async def test_chat_resets_a_stale_session_status_to_queued_on_a_new_turn(
@@ -142,7 +150,9 @@ async def test_chat_stream_emits_error_event_if_enqueue_fails_after_subscribing(
     `open_subscription` must still let that exception propagate out to the router's own
     error handling, not swallow it during cleanup."""
 
-    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+    async def _broken_enqueue(
+        _thread_id: str, _message: str, *, operation: str, use_context_hub: bool = False
+    ) -> None:
         raise RuntimeError("enqueue failed")
 
     queue = client.app.state.chat_queue_service
@@ -167,7 +177,9 @@ async def test_chat_returns_502_even_if_mark_failed_itself_raises(
     it's trying to record — that must not prevent the client from still getting its 502, which
     is the whole point of the except block in `chat`."""
 
-    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+    async def _broken_enqueue(
+        _thread_id: str, _message: str, *, operation: str, use_context_hub: bool = False
+    ) -> None:
         raise RuntimeError("enqueue failed")
 
     async def _broken_mark_failed(_thread_id: str, _error: str) -> None:
@@ -189,7 +201,9 @@ async def test_chat_stream_still_emits_error_event_even_if_mark_failed_itself_ra
     enqueue failure, the client must still get an `error` SSE event, not a silently truncated
     stream."""
 
-    async def _broken_enqueue(_thread_id: str, _message: str, *, operation: str) -> None:
+    async def _broken_enqueue(
+        _thread_id: str, _message: str, *, operation: str, use_context_hub: bool = False
+    ) -> None:
         raise RuntimeError("enqueue failed")
 
     async def _broken_mark_failed(_thread_id: str, _error: str) -> None:

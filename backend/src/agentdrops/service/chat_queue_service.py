@@ -26,10 +26,12 @@ class ChatQueueService:
         self._sessions = sessions
         self._redis = redis
 
-    async def enqueue(self, thread_id: str, message: str, *, operation: str) -> None:
+    async def enqueue(
+        self, thread_id: str, message: str, *, operation: str, use_context_hub: bool = False
+    ) -> None:
         await self._sessions.touch(thread_id, title=truncate_title(message))
         await self._sessions.set_status(thread_id, "queued")
-        run_turn_task.delay(thread_id, message, operation)
+        run_turn_task.delay(thread_id, message, operation, use_context_hub)
 
     async def mark_failed(self, thread_id: str, error: str) -> None:
         """Mark a turn failed due to an API-side enqueue/subscribe problem (e.g. Redis or a broker
@@ -41,7 +43,9 @@ class ChatQueueService:
             return
         await self._sessions.set_status(thread_id, "failed", error=error)
 
-    async def stream(self, thread_id: str, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def stream(
+        self, thread_id: str, message: str, use_context_hub: bool = False
+    ) -> AsyncIterator[dict[str, Any]]:
         """Subscribe to `thread_id`'s event channel, then enqueue one chat turn, yielding its
         progress/source events as the worker runs it — see `api/v1/chat.py::chat_stream` for the
         SSE event shapes this produces.
@@ -52,7 +56,9 @@ class ChatQueueService:
         """
         try:
             async with open_subscription(self._redis, thread_id) as pubsub:
-                await self.enqueue(thread_id, message, operation="chat_stream")
+                await self.enqueue(
+                    thread_id, message, operation="chat_stream", use_context_hub=use_context_hub
+                )
                 async for event in consume_subscription(pubsub):
                     yield event
                     if event.get("type") in _TERMINAL_EVENT_TYPES:

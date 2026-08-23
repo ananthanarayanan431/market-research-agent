@@ -27,7 +27,9 @@ from agentdrops.worker.runner import TURN_FAILED_MESSAGE, run_turn
 logger = logging.getLogger(__name__)
 
 
-async def _execute(thread_id: str, message: str, operation: str, settings: Settings) -> None:
+async def _execute(
+    thread_id: str, message: str, operation: str, settings: Settings, use_context_hub: bool
+) -> None:
     redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         engine = create_engine(settings)
@@ -40,7 +42,10 @@ async def _execute(thread_id: str, message: str, operation: str, settings: Setti
                     httpx.AsyncClient(timeout=30.0) as client,
                     checkpointer(settings) as saver,
                 ):
-                    graph = build_market_researcher(settings, client, saver)
+                    graph = build_market_researcher(
+                        settings, client, saver, session_factory,
+                        use_context_hub=use_context_hub,
+                    )
                     chat_service = ChatService(graph, sessions, audit)
                     await run_turn(
                         chat_service, thread_id, message, operation=operation, redis=redis
@@ -67,8 +72,10 @@ async def _execute(thread_id: str, message: str, operation: str, settings: Setti
 
 
 @celery_app.task(name="agentdrops.run_turn")  # type: ignore[untyped-decorator]
-def run_turn_task(thread_id: str, message: str, operation: str) -> None:
-    asyncio.run(_execute(thread_id, message, operation, get_settings()))
+def run_turn_task(
+    thread_id: str, message: str, operation: str, use_context_hub: bool = False
+) -> None:
+    asyncio.run(_execute(thread_id, message, operation, get_settings(), use_context_hub))
 
 
 async def _execute_ingest(document_id: str, settings: Settings) -> None:
