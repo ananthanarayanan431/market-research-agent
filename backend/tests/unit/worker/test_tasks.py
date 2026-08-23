@@ -52,7 +52,9 @@ def patch_worker_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         tasks_module,
         "build_market_researcher",
-        lambda settings, client, checkpointer: _FakeGraph(),
+        lambda settings, client, checkpointer, session_factory=None, *, use_context_hub=False: (
+            _FakeGraph()
+        ),
     )
 
     @asynccontextmanager
