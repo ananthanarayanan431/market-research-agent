@@ -234,20 +234,19 @@ function ProgressView({
     <div className="space-y-6">
       <ul className="space-y-3">
         {steps.map((step, i) => {
-          const isLast = i === steps.length - 1;
-          const status = isLast && isRunning ? "active" : "done";
+          const active = step.active && isRunning;
           return (
             <li key={`${step.title}-${i}`} className="flex gap-2">
               <div className="mt-1 shrink-0">
-                {status === "done" ? (
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                ) : (
+                {active ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
                 )}
               </div>
               <div>
                 <div className="text-sm font-medium text-foreground">{step.title}</div>
-                {status === "active" && step.detail && (
+                {active && step.detail && (
                   <div className="mt-1 text-xs italic text-muted-foreground">
                     {step.detail}
                   </div>

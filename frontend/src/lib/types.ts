@@ -7,6 +7,8 @@ export type Message =
 export type ProgressStep = {
   title: string;
   detail?: string;
+  topic?: string;
+  active: boolean;
 };
 
 export type ResearchSource = {
@@ -15,7 +17,7 @@ export type ResearchSource = {
 };
 
 export type StreamEvent =
-  | { type: "progress"; step: string; detail?: string }
+  | { type: "progress"; step: string; detail?: string; topic?: string }
   | { type: "source"; topic: string; summary: string }
   | { type: "source_url"; topic: string; tool_name: string; title: string; url: string }
   | { type: "clarify"; thread_id: string; response: string; suggestions: string[] }

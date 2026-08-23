@@ -68,8 +68,8 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     progress/source events as the worker runs it, via SSE — event shapes unchanged from before
     this turn ran in a background worker:
 
-    - `{"type": "progress", "step": str, "detail"?: str}` — a top-level stage started, or (from
-      inside the supervisor) one delegated research topic began.
+    - `{"type": "progress", "step": str, "detail"?: str, "topic"?: str}` — a top-level stage
+      started, or (from inside the supervisor, `topic` set) one delegated research topic began.
     - `{"type": "source", "topic": str, "summary": str}` — one delegated topic finished.
     - `{"type": "source_url", "topic": str, "tool_name": str, "title": str, "url": str}` — one
       individual search result was found while researching a delegated topic.

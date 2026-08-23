@@ -57,7 +57,7 @@ def build_supervisor_graph(
         writer = get_stream_writer()
         topic = call["args"]["research_topic"]
         async with semaphore:
-            writer({"type": "progress", "step": "researching", "detail": f"Researching: {topic}"})
+            writer({"type": "progress", "step": f"Researching: {topic}", "topic": topic})
             final_state: ResearcherState | None = None
             async for stream_type, chunk in research_graph.astream(
                 {

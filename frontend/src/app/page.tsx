@@ -95,13 +95,28 @@ export default function Home() {
         await streamChat(text, threadId, (event) => {
           if (selectionTokenRef.current !== token) return;
           if (event.type === "progress") {
-            setSteps((prev) => [...prev, { title: event.step, detail: event.detail }]);
+            // A new top-level stage retires every earlier top-level step, but leaves concurrent
+            // per-topic research steps running — those close individually on their own "source"
+            // event below, since several can still be in flight when the next stage starts.
+            setSteps((prev) => [
+              ...prev.map((s) => (s.topic ? s : { ...s, active: false })),
+              { title: event.step, detail: event.detail, topic: event.topic, active: true },
+            ]);
           } else if (event.type === "source") {
             sourceCount += 1;
             setSources((prev) => [...prev, { topic: event.topic, summary: event.summary }]);
+            setSteps((prev) =>
+              prev.map((s) => (s.topic === event.topic ? { ...s, active: false } : s))
+            );
           } else if (event.type === "source_url") {
-            // Per-source URL detail isn't surfaced in the UI yet — explicitly ignored so it
-            // never falls into the terminal branch below (it has no `thread_id`).
+            // Surface the page currently being read as the active topic step's live detail line.
+            setSteps((prev) =>
+              prev.map((s) =>
+                s.topic === event.topic && s.active
+                  ? { ...s, detail: `Reading: ${event.title}` }
+                  : s
+              )
+            );
           } else {
             setThreadId(event.thread_id);
             if (event.type === "done") setReport(event.report);
