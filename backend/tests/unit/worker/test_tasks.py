@@ -142,3 +142,103 @@ def test_run_turn_task_records_failure_when_resource_setup_fails(
     assert published == [
         {"type": "error", "thread_id": "t1", "message": tasks_module.TURN_FAILED_MESSAGE}
     ]
+
+
+class _FakeContextHubStore:
+    def __init__(self) -> None:
+        self.ready_ids: list[str] = []
+        self.failed: list[tuple[str, str]] = []
+        self.inserted: list[tuple[str, list[str], list[list[float]]]] = []
+        self._document = None
+
+    def set_document(self, document) -> None:
+        self._document = document
+
+    async def get_document(self, document_id: str):
+        return self._document
+
+    async def insert_chunks(self, document_id, chunks, embeddings) -> None:
+        self.inserted.append((document_id, chunks, embeddings))
+
+    async def mark_ready(self, document_id: str) -> None:
+        self.ready_ids.append(document_id)
+
+    async def mark_failed(self, document_id: str, error: str) -> None:
+        self.failed.append((document_id, error))
+
+
+class _FakeContextHubStorage:
+    def __init__(self, data: bytes = b"hello world") -> None:
+        self._data = data
+
+    async def get(self, key: str) -> bytes:
+        return self._data
+
+
+def test_ingest_contexthub_document_task_extracts_chunks_and_embeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from agentdrops.repository.contexthub import ContextHubDocumentRecord
+
+    fake_store = _FakeContextHubStore()
+    fake_store.set_document(
+        ContextHubDocumentRecord(
+            id="doc-1", title="a.txt", source_type="file", source_name="a.txt",
+            content_type="txt", status="processing", created_at=datetime.now(UTC),
+            minio_key="doc-1/a.txt",
+        )
+    )
+    monkeypatch.setattr(tasks_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(tasks_module, "create_engine", lambda settings: _FakeEngine())
+    monkeypatch.setattr(tasks_module, "create_session_factory", lambda engine: object())
+    monkeypatch.setattr(tasks_module, "ContextHubStore", lambda session_factory: fake_store)
+    monkeypatch.setattr(
+        tasks_module, "ContextHubStorage", lambda settings: _FakeContextHubStorage()
+    )
+
+    class _FakeEmbedder:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1] * 1536 for _ in texts]
+
+    monkeypatch.setattr(tasks_module, "EmbeddingClient", _FakeEmbedder)
+
+    tasks_module.ingest_contexthub_document_task("doc-1")
+
+    assert fake_store.ready_ids == ["doc-1"]
+    assert fake_store.inserted[0][0] == "doc-1"
+    assert fake_store.inserted[0][1] == ["hello world"]
+
+
+def test_ingest_contexthub_document_task_marks_failed_on_extraction_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from agentdrops.repository.contexthub import ContextHubDocumentRecord
+
+    fake_store = _FakeContextHubStore()
+    fake_store.set_document(
+        ContextHubDocumentRecord(
+            id="doc-2", title="a.exe", source_type="file", source_name="a.exe",
+            content_type="exe", status="processing", created_at=datetime.now(UTC),
+            minio_key="doc-2/a.exe",
+        )
+    )
+    monkeypatch.setattr(tasks_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(tasks_module, "create_engine", lambda settings: _FakeEngine())
+    monkeypatch.setattr(tasks_module, "create_session_factory", lambda engine: object())
+    monkeypatch.setattr(tasks_module, "ContextHubStore", lambda session_factory: fake_store)
+    monkeypatch.setattr(
+        tasks_module, "ContextHubStorage", lambda settings: _FakeContextHubStorage()
+    )
+
+    tasks_module.ingest_contexthub_document_task("doc-2")
+
+    assert fake_store.ready_ids == []
+    assert fake_store.failed[0][0] == "doc-2"
+    assert "unsupported content_type" in fake_store.failed[0][1]
