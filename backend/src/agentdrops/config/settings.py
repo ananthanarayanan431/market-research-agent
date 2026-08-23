@@ -47,7 +47,9 @@ class Settings(BaseSettings):
     minio_secret_key: str
 
     minio_contexthub_bucket: str = "contexthub"
-    """Bucket for raw Context Hub file uploads (extracted text for URL sources isn't stored here)."""
+    """Bucket for raw Context Hub file uploads.
+
+    Extracted text for URL sources isn't stored here."""
 
     embedding_api_key: str
     embedding_base_url: str = "https://api.openai.com/v1"
