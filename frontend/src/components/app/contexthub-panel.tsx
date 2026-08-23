@@ -25,7 +25,10 @@ export function ContextHubPanel({ open, onClose }: { open: boolean; onClose: () 
 
   const refresh = () => {
     listContextHubDocuments()
-      .then(setDocuments)
+      .then((docs) => {
+        setDocuments(docs);
+        setError(null);
+      })
       .catch(() => setError("Couldn't load Context Hub documents."));
   };
 
