@@ -61,3 +61,14 @@ export type ApiError = {
 export type ApiEnvelope<T> =
   | { success: true; data: T }
   | { success: false; data: ApiError };
+
+export type ContextHubDocumentStatus = "processing" | "ready" | "failed";
+
+export type ContextHubDocument = {
+  id: string;
+  title: string;
+  source_type: "file" | "url";
+  status: ContextHubDocumentStatus;
+  error: string | null;
+  created_at: string;
+};
