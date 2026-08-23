@@ -1,6 +1,6 @@
 """System prompt for the supervisor's `supervisor` node (the lead researcher)."""
 
-LEAD_RESEARCHER_PROMPT = """You are the lead researcher for a market-research investigation.
+LEAD_RESEARCHER_PROMPT = """You are the lead researcher for a finance research investigation.
 Today is {date}.
 
 Research brief:

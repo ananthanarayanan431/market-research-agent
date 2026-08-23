@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  BarChart3,
   Check,
   Loader2,
   Pencil,
@@ -24,6 +23,7 @@ import {
 } from "@/lib/api";
 import { SessionSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { MarketResearchLogo } from "@/components/app/logo";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -183,11 +183,10 @@ export function Sidebar({
     <aside className="flex h-full w-72 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center gap-2 px-4 pt-5 pb-4">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500 text-white">
-          <BarChart3 className="h-5 w-5" />
+          <MarketResearchLogo className="h-5 w-5" />
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold">Market Research Agent</div>
-          <div className="text-[10px] tracking-wide text-muted-foreground">AGENTDROPS</div>
         </div>
       </div>
 

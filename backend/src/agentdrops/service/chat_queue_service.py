@@ -9,7 +9,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from agentdrops.config.constants import CHAT_TITLE_MAX_LENGTH
+from agentdrops.config.constants import truncate_title
 from agentdrops.jobs.events import consume_subscription, open_subscription
 from agentdrops.repository.sessions import SessionStore
 from agentdrops.worker.tasks import run_turn_task
@@ -27,7 +27,7 @@ class ChatQueueService:
         self._redis = redis
 
     async def enqueue(self, thread_id: str, message: str, *, operation: str) -> None:
-        await self._sessions.touch(thread_id, title=message[:CHAT_TITLE_MAX_LENGTH])
+        await self._sessions.touch(thread_id, title=truncate_title(message))
         await self._sessions.set_status(thread_id, "queued")
         run_turn_task.delay(thread_id, message, operation)
 

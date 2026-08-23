@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, CheckCircle2, Loader2, Sparkles } from "lucide-react";
+import { ArrowUp, CheckCircle2, FileText, Loader2, Sparkles } from "lucide-react";
 import { Message, Phase, StreamEvent } from "@/lib/types";
+import { DrawerMode } from "@/components/app/research-drawer";
 import { cn } from "@/lib/utils";
 
 export const FALLBACK_STARTER_SUGGESTIONS = [
-  "Competitive landscape for enterprise SaaS in fintech",
-  "Consumer trends in plant-based foods, US market",
-  "Market sizing for AI coding assistants",
+  "Competitive landscape for digital banking platforms in the US",
+  "Market sizing for embedded finance and BNPL in Southeast Asia",
+  "Investment trends in AI-driven wealth management platforms",
 ];
 
 export function ChatPanel({
@@ -21,7 +22,7 @@ export function ChatPanel({
   sendMessage,
   onStartRun,
   onOpenDrawer,
-  onChooseFormat,
+  drawerOpen,
   clarifySuggestions,
   setClarifySuggestions,
   starterSuggestions,
@@ -34,8 +35,8 @@ export function ChatPanel({
   addMessage: (m: Message) => void;
   sendMessage: (text: string) => Promise<StreamEvent | null>;
   onStartRun: () => void;
-  onOpenDrawer: () => void;
-  onChooseFormat: (format: "paragraph" | "table") => void;
+  onOpenDrawer: (mode?: DrawerMode) => void;
+  drawerOpen: boolean;
   clarifySuggestions: string[];
   setClarifySuggestions: (s: string[]) => void;
   starterSuggestions: string[];
@@ -43,24 +44,11 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [chipAnswer, setChipAnswer] = useState("");
   const [selectedChips, setSelectedChips] = useState<string[]>([]);
-  const [deliveryChosen, setDeliveryChosen] = useState<
-    "paragraph" | "table" | null
-  >(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, phase]);
-
-  // `deliveryChosen` is scoped to one research run: reset it whenever the active topic changes
-  // (a new topic, or a different session reopened from the sidebar), otherwise the format
-  // buttons stay hidden on every run after the first. Reset during render (not an effect) per
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
-  const [prevTopic, setPrevTopic] = useState(topic);
-  if (topic !== prevTopic) {
-    setPrevTopic(topic);
-    setDeliveryChosen(null);
-  }
 
   /** Apply a settled `clarify | done | error` stream event to messages/suggestions/phase.
    * Shared by `startTopic` and `submitClarify`, which only differ in which phase to fall back
@@ -78,9 +66,10 @@ export function ChatPanel({
       addMessage({
         id: crypto.randomUUID(),
         kind: "assistant",
-        text: "Research complete. How would you like the findings delivered?",
+        text: "Research complete — I've opened the full report in the panel on the right.",
       });
       setPhase("complete");
+      onOpenDrawer("report");
     } else if (event.type === "error") {
       setClarifySuggestions([]);
       addMessage({ id: crypto.randomUUID(), kind: "assistant", text: `Research failed: ${event.message}` });
@@ -93,7 +82,13 @@ export function ChatPanel({
     setTopic(text);
     addMessage({ id: crypto.randomUUID(), kind: "user", text });
     setInput("");
-    setPhase("clarifying");
+    // Optimistically treat this like a run in progress — opens the drawer and starts
+    // showing live steps immediately. If the model comes back asking to clarify instead,
+    // applyTerminalEvent's "clarify" branch below flips the phase back. Without this, the
+    // screen would sit blank for the full clarify_with_user call — and, whenever no
+    // clarification turns out to be needed, for the entire research run that follows it in
+    // that same request, since that whole pipeline runs inside one /chat/stream call.
+    onStartRun();
     try {
       const event = await sendMessage(text);
       // null means the sidebar switched to a different session before this stream settled —
@@ -140,31 +135,24 @@ export function ChatPanel({
     }
   };
 
-  const chooseFormat = (format: "paragraph" | "table") => {
-    setDeliveryChosen(format);
-    addMessage({
-      id: crypto.randomUUID(),
-      kind: "user",
-      text: format === "paragraph" ? "Paragraph report, please." : "Excel / table, please.",
-    });
-    onChooseFormat(format);
-    setPhase("delivered");
-    setTimeout(() => {
-      addMessage({
-        id: crypto.randomUUID(),
-        kind: "assistant",
-        text: "Done — I've opened the full report in the panel on the right.",
-      });
-    }, 400);
-  };
-
   return (
     <div className="flex h-full flex-1 flex-col">
-      <div className="flex items-center border-b px-6 py-3 text-xs text-muted-foreground">
-        Market Research Agent Application
-        <span className="ml-2 rounded bg-muted px-2 py-0.5 text-[10px]">
-          Content is user-generated and unverified.
-        </span>
+      <div className="flex items-center justify-between border-b px-6 py-3 text-xs text-muted-foreground">
+        <div className="flex items-center">
+          Market Research Agent Application
+          <span className="ml-2 rounded bg-muted px-2 py-0.5 text-[10px]">
+            Content is user-generated and unverified.
+          </span>
+        </div>
+        {phase === "complete" && topic && !drawerOpen && (
+          <button
+            onClick={() => onOpenDrawer("report")}
+            className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            View report
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-8">
@@ -178,8 +166,8 @@ export function ChatPanel({
             </h1>
             <p className="text-muted-foreground">
               Give me an objective. I&apos;ll ask a few sharpening questions,
-              run deep research across the market, and hand you back a report
-              or a data table.
+              run deep research across the market, and hand you back a
+              markdown report you can download as a PDF.
             </p>
             <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
               {starterSuggestions.map((s) => (
@@ -209,41 +197,23 @@ export function ChatPanel({
               )
             )}
 
-            {(phase === "running" || phase === "complete" || phase === "delivered") &&
-              topic && (
-                <button
-                  onClick={onOpenDrawer}
-                  className="flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors hover:bg-accent"
-                >
-                  {phase === "running" ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{topic}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {phase === "running" ? "Researching..." : "Research complete"}
-                    </div>
+            {(phase === "running" || phase === "complete") && topic && (
+              <button
+                onClick={() => onOpenDrawer(phase === "running" ? "progress" : "report")}
+                className="flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors hover:bg-accent"
+              >
+                {phase === "running" ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                )}
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{topic}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {phase === "running" ? "Researching..." : "Research complete"}
                   </div>
-                </button>
-              )}
-
-            {phase === "complete" && deliveryChosen === null && (
-              <div className="flex gap-2">
-                <button
-                  onClick={() => chooseFormat("paragraph")}
-                  className="rounded-md bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
-                >
-                  Paragraph report
-                </button>
-                <button
-                  onClick={() => chooseFormat("table")}
-                  className="rounded-md border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
-                >
-                  Excel / table
-                </button>
-              </div>
+                </div>
+              </button>
             )}
 
             {phase === "clarifying" && clarifySuggestions.length > 0 && (
@@ -292,7 +262,7 @@ export function ChatPanel({
                 ? "Add region, timeframe, focus..."
                 : "What do you want to research?"
             }
-            disabled={phase === "running" || phase === "complete" || phase === "delivered"}
+            disabled={phase === "running" || phase === "complete"}
             rows={1}
             className="w-full resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
           />
@@ -306,7 +276,7 @@ export function ChatPanel({
                 if (phase === "idle") startTopic(input);
                 else if (phase === "clarifying") submitClarify();
               }}
-              disabled={phase === "running" || phase === "complete" || phase === "delivered"}
+              disabled={phase === "running" || phase === "complete"}
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
                 phase === "clarifying" || (phase === "idle" && input.trim())

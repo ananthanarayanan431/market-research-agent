@@ -25,7 +25,12 @@ def make_tavily_tool(tavily: TavilySearchTool, llm: BaseChatModel) -> BaseTool:
 
     @tool
     async def tavily_search(query: str, max_results: int = 5) -> str:
-        """Search the web via Tavily for market-research sources on `query`."""
+        """Search the web via Tavily for finance-focused sources on `query`.
+
+        Phrase `query` to surface financial coverage specifically: include the company name or
+        ticker, sector, or macro term, and prefer financial-news/filing/analyst-style phrasing
+        (e.g. "NVDA Q3 earnings guidance data center revenue") over a generic topic query.
+        """
         return await run_search_pipeline(tavily, llm, query, max_results)
 
     return tavily_search
