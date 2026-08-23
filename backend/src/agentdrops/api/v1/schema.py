@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class ChatRequest(BaseModel):
@@ -65,3 +65,20 @@ class UpdateSessionRequest(BaseModel):
 
     title: str | None = None
     pinned: bool | None = None
+
+
+class ContextHubUrlRequest(BaseModel):
+    url: HttpUrl
+
+
+class ContextHubDocumentResponse(BaseModel):
+    id: str
+    title: str
+    source_type: Literal["file", "url"]
+    status: Literal["processing", "ready", "failed"]
+    error: str | None = None
+    created_at: str
+
+
+class ContextHubDocumentsResponse(BaseModel):
+    documents: list[ContextHubDocumentResponse]
