@@ -6,6 +6,7 @@ import asyncio
 import io
 
 from minio import Minio
+from minio.error import S3Error
 
 from agentdrops.config import Settings
 
@@ -22,8 +23,13 @@ class ContextHubStorage:
 
     async def _ensure_bucket(self) -> None:
         exists = await asyncio.to_thread(self.client.bucket_exists, self._bucket)
-        if not exists:
+        if exists:
+            return
+        try:
             await asyncio.to_thread(self.client.make_bucket, self._bucket)
+        except S3Error as exc:
+            if exc.code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                raise
 
     async def put(self, key: str, data: bytes, content_type: str) -> None:
         await self._ensure_bucket()
