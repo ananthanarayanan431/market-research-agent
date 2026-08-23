@@ -27,12 +27,17 @@ async function unwrap<T>(response: Response): Promise<T> {
 export async function streamChat(
   message: string,
   threadId: string | null,
+  useContextHub: boolean,
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread_id: threadId, message }),
+    body: JSON.stringify({
+      thread_id: threadId,
+      message,
+      use_context_hub: useContextHub,
+    }),
   });
 
   if (!response.ok || !response.body) {

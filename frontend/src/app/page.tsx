@@ -32,6 +32,7 @@ export default function Home() {
   const [starterSuggestions, setStarterSuggestions] = useState<string[]>(
     FALLBACK_STARTER_SUGGESTIONS
   );
+  const [useContextHub, setUseContextHub] = useState(false);
 
   // Bumped on every selectSession call; async work below checks it's still current before
   // applying results, so a slower session-A fetch can't clobber a faster session-B selection.
@@ -92,7 +93,7 @@ export default function Home() {
         const token = selectionTokenRef.current;
         let terminal: StreamEvent | null = null;
         let sourceCount = 0;
-        await streamChat(text, threadId, (event) => {
+        await streamChat(text, threadId, useContextHub, (event) => {
           if (selectionTokenRef.current !== token) return;
           if (event.type === "progress") {
             // A new top-level stage retires every earlier top-level step, but leaves concurrent
@@ -278,6 +279,8 @@ export default function Home() {
           clarifySuggestions={clarifySuggestions}
           setClarifySuggestions={setClarifySuggestions}
           starterSuggestions={starterSuggestions}
+          useContextHub={useContextHub}
+          setUseContextHub={setUseContextHub}
         />
         {drawerOpen && topic && (
           <div

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, CheckCircle2, FileText, Loader2, Sparkles } from "lucide-react";
+import { ArrowUp, CheckCircle2, Database, FileText, Loader2, Sparkles } from "lucide-react";
 import { Message, Phase, StreamEvent } from "@/lib/types";
 import { DrawerMode } from "@/components/app/research-drawer";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,8 @@ export function ChatPanel({
   clarifySuggestions,
   setClarifySuggestions,
   starterSuggestions,
+  useContextHub,
+  setUseContextHub,
 }: {
   phase: Phase;
   setPhase: (p: Phase) => void;
@@ -40,6 +42,8 @@ export function ChatPanel({
   clarifySuggestions: string[];
   setClarifySuggestions: (s: string[]) => void;
   starterSuggestions: string[];
+  useContextHub: boolean;
+  setUseContextHub: (v: boolean) => void;
 }) {
   const [input, setInput] = useState("");
   const [chipAnswer, setChipAnswer] = useState("");
@@ -271,6 +275,20 @@ export function ChatPanel({
               <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
               Deep Research
             </span>
+            <button
+              type="button"
+              onClick={() => setUseContextHub(!useContextHub)}
+              title="Include your uploaded Context Hub knowledge in this research"
+              className={cn(
+                "ml-2 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                useContextHub
+                  ? "border-blue-500 bg-blue-500/10 text-blue-500"
+                  : "text-muted-foreground hover:bg-accent"
+              )}
+            >
+              <Database className="h-3 w-3" />
+              Use uploaded knowledge
+            </button>
             <button
               onClick={() => {
                 if (phase === "idle") startTopic(input);
