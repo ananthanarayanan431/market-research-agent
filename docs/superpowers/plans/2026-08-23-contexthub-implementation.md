@@ -2419,7 +2419,7 @@ In `backend/src/agentdrops/service/chat_queue_service.py`, update:
     async def enqueue(
         self, thread_id: str, message: str, *, operation: str, use_context_hub: bool = False
     ) -> None:
-        await self._sessions.touch(thread_id, title=message[:CHAT_TITLE_MAX_LENGTH])
+        await self._sessions.touch(thread_id, title=truncate_title(message))
         await self._sessions.set_status(thread_id, "queued")
         run_turn_task.delay(thread_id, message, operation, use_context_hub)
 ```
@@ -2899,43 +2899,62 @@ Update the `sendMessage` function's `streamChat` call:
         await streamChat(text, threadId, useContextHub, (event) => {
 ```
 
-Pass the new prop/setter down to `ChatPanel`:
+Pass the new prop/setter down to `ChatPanel`: find the existing `<ChatPanel ... />` element in
+the JSX returned by `Home` and add two new props to it — `useContextHub={useContextHub}` and
+`setUseContextHub={setUseContextHub}` — alongside whatever props are already there (e.g.
+`starterSuggestions={starterSuggestions}`, `drawerOpen={drawerOpen}`). Do not remove or
+reorder any existing prop; this is an addition to the existing prop list, not a block
+replacement — other sessions have added props to this same element since this plan was
+written, so a literal whole-block replace would silently drop them. For example, if the
+element currently ends with:
 
 ```tsx
-        <ChatPanel
-          phase={phase}
-          setPhase={setPhase}
-          topic={topic}
-          setTopic={setTopic}
-          messages={messages}
-          addMessage={addMessage}
-          sendMessage={sendMessage}
-          onStartRun={startRun}
-          onOpenDrawer={(mode) => {
-            setDrawerMode(mode ?? "progress");
-            setDrawerOpen(true);
-          }}
-          clarifySuggestions={clarifySuggestions}
-          setClarifySuggestions={setClarifySuggestions}
+          starterSuggestions={starterSuggestions}
+        />
+```
+
+add the two new props just before the closing `/>`:
+
+```tsx
           starterSuggestions={starterSuggestions}
           useContextHub={useContextHub}
           setUseContextHub={setUseContextHub}
         />
 ```
 
+(adjust to wherever the closing `/>` actually falls in the current file — the point is additive insertion, not replacing the whole tag).
+
 - [ ] **Step 3: Add the toggle control in `ChatPanel`**
 
-In `frontend/src/components/app/chat-panel.tsx`, add `Database` to the `lucide-react` import, add the two new props to the destructured props and its type annotation:
+In `frontend/src/components/app/chat-panel.tsx`, add `Database` to the `lucide-react` import. This component has picked up other props since this plan was written (e.g. a `drawerOpen: boolean` prop and a "View report" header button, from other sessions' work) — this is purely additive, so don't worry about matching the file's exact current prop list. Just:
+- Add `useContextHub,` and `setUseContextHub,` to the destructured prop list in the function signature (anywhere among the existing destructured props, e.g. right after `starterSuggestions,`).
+- Add `useContextHub: boolean;` and `setUseContextHub: (v: boolean) => void;` to the inline prop-type object (anywhere among the existing entries, e.g. right after `starterSuggestions: string[];`).
+
+For example, if the signature currently ends with:
 
 ```typescript
+  starterSuggestions,
+}: {
+  // ...other existing props...
+  starterSuggestions: string[];
+}) {
+```
+
+it becomes:
+
+```typescript
+  starterSuggestions,
   useContextHub,
   setUseContextHub,
 }: {
-  // ...existing prop types...
+  // ...other existing props...
+  starterSuggestions: string[];
   useContextHub: boolean;
   setUseContextHub: (v: boolean) => void;
 }) {
 ```
+
+(adjust to wherever `starterSuggestions` actually falls in the current file — the point is additive insertion into the existing destructuring/type list, not replacing the whole signature.)
 
 In the input area's badge row (next to the existing "Deep Research" badge), add a toggle button:
 
