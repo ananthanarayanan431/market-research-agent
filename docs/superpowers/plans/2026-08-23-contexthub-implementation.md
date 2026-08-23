@@ -1572,7 +1572,7 @@ git commit -m "feat(contexthub): wire context_hub_search into the graph behind a
 
 **Interfaces:**
 - Consumes: `ContextHubStore` (Task 6), `ContextHubStorage` (Task 3), `extract_file_text`/`fetch_url_text`/`chunk_text` (Task 4), `EmbeddingClient` (Task 5).
-- Produces: `ContextHubService(store, storage)` with `async def upload_file(self, filename: str, content_type: str, data: bytes) -> ContextHubDocumentRecord`, `async def add_url(self, url: str) -> ContextHubDocumentRecord`, `async def list_documents(self) -> list[ContextHubDocumentRecord]`, `async def delete_document(self, document_id: str) -> Literal["deleted", "not_found"]` — Task 10's router depends on this exact interface. Also produces Celery task `agentdrops.ingest_contexthub_document` (`ingest_contexthub_document_task(document_id: str) -> None`), which `ContextHubService.upload_file`/`add_url` enqueue via `.delay(...)`.
+- Produces: `ContextHubService(store, storage, max_upload_mb)` with `self.max_upload_mb: int` (public), `async def upload_file(self, filename: str, content_type: str, data: bytes) -> ContextHubDocumentRecord`, `async def add_url(self, url: str) -> ContextHubDocumentRecord`, `async def list_documents(self) -> list[ContextHubDocumentRecord]`, `async def delete_document(self, document_id: str) -> Literal["deleted", "not_found"]` — Task 10's router depends on this exact interface (including `max_upload_mb`, which it reads to reject oversized uploads before calling `upload_file`). Also produces Celery task `agentdrops.ingest_contexthub_document` (`ingest_contexthub_document_task(document_id: str) -> None`), which `ContextHubService.upload_file`/`add_url` enqueue via `.delay(...)`.
 
 - [ ] **Step 1: Write the failing test — service**
 
@@ -1600,7 +1600,7 @@ async def test_upload_file_stores_bytes_and_enqueues_ingestion() -> None:
     store = AsyncMock()
     store.create_document.return_value = _make_record()
     storage = AsyncMock()
-    service = ContextHubService(store, storage)
+    service = ContextHubService(store, storage, max_upload_mb=50)
 
     with patch(
         "agentdrops.service.contexthub_service.ingest_contexthub_document_task"
@@ -1622,7 +1622,7 @@ async def test_add_url_skips_storage_and_enqueues_ingestion() -> None:
         source_type="url", source_name="https://intranet.example.com/wiki", content_type="url"
     )
     storage = AsyncMock()
-    service = ContextHubService(store, storage)
+    service = ContextHubService(store, storage, max_upload_mb=50)
 
     with patch(
         "agentdrops.service.contexthub_service.ingest_contexthub_document_task"
@@ -1642,7 +1642,7 @@ async def test_delete_document_removes_storage_object_when_present() -> None:
     store.get_document.return_value = _make_record(minio_key="doc-1/report.pdf")
     store.delete_document.return_value = True
     storage = AsyncMock()
-    service = ContextHubService(store, storage)
+    service = ContextHubService(store, storage, max_upload_mb=50)
 
     result = await service.delete_document("doc-1")
 
@@ -1655,7 +1655,7 @@ async def test_delete_document_not_found() -> None:
     store = AsyncMock()
     store.get_document.return_value = None
     storage = AsyncMock()
-    service = ContextHubService(store, storage)
+    service = ContextHubService(store, storage, max_upload_mb=50)
 
     assert await service.delete_document("missing") == "not_found"
     storage.delete.assert_not_awaited()
@@ -1691,9 +1691,14 @@ DeleteResult = Literal["deleted", "not_found"]
 
 
 class ContextHubService:
-    def __init__(self, store: ContextHubStore, storage: ContextHubStorage) -> None:
+    def __init__(
+        self, store: ContextHubStore, storage: ContextHubStorage, max_upload_mb: int
+    ) -> None:
         self._store = store
         self._storage = storage
+        self.max_upload_mb = max_upload_mb
+        """Public — the router (Task 10) reads this to reject oversized uploads before ever
+        calling `upload_file`, the same way it reads `_resolve_content_type` for extensions."""
 
     async def upload_file(
         self, filename: str, content_type: str, data: bytes
@@ -1978,6 +1983,7 @@ def _make_record(**overrides) -> ContextHubDocumentRecord:
 @pytest.fixture
 def contexthub_service(client: TestClient) -> AsyncMock:
     service = AsyncMock()
+    service.max_upload_mb = 50  # matches Settings.contexthub_max_upload_mb's default
     client.app.state.contexthub_service = service
     return service
 
@@ -2005,6 +2011,21 @@ def test_upload_document_rejects_unsupported_extension(
     response = client.post(
         "/v1/contexthub/documents",
         files={"file": ("virus.exe", b"bytes", "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    contexthub_service.upload_file.assert_not_awaited()
+
+
+def test_upload_document_rejects_files_over_the_configured_size_cap(
+    client: TestClient, contexthub_service: AsyncMock
+) -> None:
+    contexthub_service.max_upload_mb = 1
+    oversized = b"x" * (2 * 1024 * 1024)
+
+    response = client.post(
+        "/v1/contexthub/documents",
+        files={"file": ("report.pdf", oversized, "application/pdf")},
     )
 
     assert response.status_code == 400
@@ -2129,8 +2150,12 @@ async def upload_document(
         raise ErrorResponse(
             BadRequestError(message="Unsupported file type — allowed: pdf, docx, txt, csv")
         )
-    data = await file.read()
     service: ContextHubService = request.app.state.contexthub_service
+    data = await file.read()
+    if len(data) > service.max_upload_mb * 1024 * 1024:
+        raise ErrorResponse(
+            BadRequestError(message=f"File exceeds the {service.max_upload_mb}MB upload limit")
+        )
     document = await service.upload_file(file.filename or "upload", content_type, data)
     return SuccessResponse(data=_to_response(document))
 
@@ -2203,7 +2228,9 @@ Inside `lifespan(...)`, after the existing `session_factory = create_session_fac
 ```python
                 contexthub_store = ContextHubStore(session_factory)
                 contexthub_storage = ContextHubStorage(settings)
-                app.state.contexthub_service = ContextHubService(contexthub_store, contexthub_storage)
+                app.state.contexthub_service = ContextHubService(
+                    contexthub_store, contexthub_storage, settings.contexthub_max_upload_mb
+                )
 ```
 
 (placed alongside the other `app.state.*_service` assignments already there)
