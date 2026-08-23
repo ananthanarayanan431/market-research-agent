@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Check,
+  Database,
   Loader2,
   Pencil,
   Pin,
@@ -24,6 +25,7 @@ import {
 import { SessionSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { MarketResearchLogo } from "@/components/app/logo";
+import { ContextHubPanel } from "@/components/app/contexthub-panel";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -94,6 +96,7 @@ export function Sidebar({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [deleteBlockedId, setDeleteBlockedId] = useState<string | null>(null);
+  const [contextHubOpen, setContextHubOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -345,6 +348,13 @@ export function Sidebar({
 
       <div className="space-y-2 border-t px-4 py-4">
         <button
+          onClick={() => setContextHubOpen(true)}
+          className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
+        >
+          <Database className="h-4 w-4" />
+          Context Hub
+        </button>
+        <button
           onClick={toggleTheme}
           className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
         >
@@ -355,6 +365,7 @@ export function Sidebar({
           Deep research · paragraph &amp; tabular output
         </div>
       </div>
+      <ContextHubPanel open={contextHubOpen} onClose={() => setContextHubOpen(false)} />
     </aside>
   );
 }
