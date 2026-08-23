@@ -3,6 +3,13 @@ source-of-truth for Alembic. Importing this package registers every table on `Ba
 
 from .audit_log import AuditLogTable
 from .base import Base
+from .contexthub import ContextHubChunkTable, ContextHubDocumentTable
 from .sessions import SessionTable
 
-__all__ = ["AuditLogTable", "Base", "SessionTable"]
+__all__ = [
+    "AuditLogTable",
+    "Base",
+    "ContextHubChunkTable",
+    "ContextHubDocumentTable",
+    "SessionTable",
+]
